@@ -1,12 +1,15 @@
-//! 曲库列表与播放指示器：每首歌两行，标题和时长在上，歌手、专辑和格式在下。
+//! 曲库列表与播放指示器：每首歌两行，标题和时长在上，文件夹、歌手、专辑和格式在下，
+//! 长录音的收听进度靠右。
 
 use std::time::Duration;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::player::PlayState;
+use crate::progress::Listened;
 use crate::theme::Theme;
 use crate::track::{Folder, Track};
 
@@ -23,6 +26,16 @@ pub(super) const LIST_GAP_WIDTH: usize = 2;
 /// 曲库每个列表项占的屏幕行数，鼠标命中测试按它换算。
 pub(super) const LIBRARY_ITEM_HEIGHT: u16 = 2;
 const HIGHLIGHT_SYMBOL_WIDTH: usize = 2;
+/// 收听进度格的宽度：十格进度条加右对齐的百分比，窄时只留百分比。
+const FULL_PROGRESS_WIDTH: usize = 15;
+const COMPACT_PROGRESS_WIDTH: usize = 6;
+/// 第二行至少这么宽才放完整的进度格、才放得下精简的进度格。
+const FULL_PROGRESS_MIN_CONTENT: usize = 40;
+const COMPACT_PROGRESS_MIN_CONTENT: usize = 16;
+const PROGRESS_BAR_CELLS: usize = 10;
+/// 详情和进度格之间至少留的空白。
+const PROGRESS_GAP: usize = 2;
+const FINISHED_LABEL: &str = "✓ 听完";
 
 pub(super) fn draw_library(
     frame: &mut Frame,
@@ -94,15 +107,20 @@ pub(super) fn draw_library(
         } else {
             Style::new().fg(theme.primary)
         };
-        let (title, duration, detail) = track_row_text(track, usable, duration_width);
+        let row = track_row_text(track, usable, duration_width, app.listened(track));
+        // 第二行与标题左对齐；选中时 ratatui 在这一行用空白代替高亮符号。
+        let mut detail = vec![Span::raw(INACTIVE_ICON), Span::styled(row.detail, muted)];
+        if let Some(progress) = row.progress {
+            detail.push(Span::styled(progress.heard, Style::new().fg(theme.primary)));
+            detail.push(Span::styled(progress.rest, muted));
+        }
         Some(ListItem::new(vec![
             Line::from(vec![
                 Span::styled(icon, icon_style),
-                Span::styled(title, title_style),
-                Span::styled(duration, muted),
+                Span::styled(row.title, title_style),
+                Span::styled(row.duration, muted),
             ]),
-            // 第二行与标题左对齐；选中时 ratatui 在这一行用空白代替高亮符号。
-            Line::from(vec![Span::raw(INACTIVE_ICON), Span::styled(detail, muted)]),
+            Line::from(detail),
         ]))
     });
 
@@ -131,15 +149,33 @@ pub(super) fn playback_action_indicator(state: PlayState, theme: &Theme) -> (&'s
     }
 }
 
-/// 一首歌去掉播放图标后的文字：标题（补足空白）、时长、第二行的详情。
-///
+/// 一首歌去掉播放图标后的文字。
+#[derive(Debug)]
+pub(super) struct RowText {
+    /// 标题，补足空白后与时长合起来恰好占满一行。
+    pub(super) title: String,
+    /// 右对齐成一列的时长。
+    pub(super) duration: String,
+    /// 第二行的详情，按宽度截断；后面有进度格时补足空白，让进度格靠右。
+    pub(super) detail: String,
+    pub(super) progress: Option<ProgressCell>,
+}
+
+/// 第二行右端的收听进度：`heard` 是进度条已听的部分（用主色），`rest` 是其余部分。
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct ProgressCell {
+    pub(super) heard: String,
+    pub(super) rest: String,
+}
+
 /// 标题与时长合起来恰好占满 `width - 图标宽`，时长右对齐成一列；
-/// 详情按同样的宽度截断。
+/// 详情和收听进度按同样的宽度排在第二行。
 pub(super) fn track_row_text(
     track: &Track,
     width: usize,
     duration_width: usize,
-) -> (String, String, String) {
+    listened: Option<Listened>,
+) -> RowText {
     let content = width.saturating_sub(LIST_ICON_WIDTH);
     let title_width = content.saturating_sub(duration_width + LIST_GAP_WIDTH);
     let title = format!(
@@ -164,5 +200,75 @@ pub(super) fn track_row_text(
     .flatten()
     .collect::<Vec<_>>()
     .join(" · ");
-    (title, duration, truncate_display(&detail, content))
+    let progress = listened.and_then(|listened| progress_cell(listened, track.duration, content));
+    let detail = match &progress {
+        None => truncate_display(&detail, content),
+        Some(cell) => {
+            let cell_width = UnicodeWidthStr::width(cell.heard.as_str())
+                + UnicodeWidthStr::width(cell.rest.as_str());
+            let detail_width = content.saturating_sub(cell_width + PROGRESS_GAP);
+            let detail = truncate_display(&detail, detail_width);
+            let padding = content
+                .saturating_sub(cell_width)
+                .saturating_sub(UnicodeWidthStr::width(detail.as_str()));
+            format!("{detail}{}", " ".repeat(padding))
+        }
+    };
+    RowText {
+        title,
+        duration,
+        detail,
+        progress,
+    }
+}
+
+/// 收听进度格。百分比向下取整并限制在 1–99：刚开始听也看得出听过，
+/// 没听完的不会显示成 100%；进度条因此也永远不满，满格只留给“听完”。
+fn progress_cell(
+    listened: Listened,
+    duration: Option<Duration>,
+    content: usize,
+) -> Option<ProgressCell> {
+    let full = if content >= FULL_PROGRESS_MIN_CONTENT {
+        true
+    } else if content >= COMPACT_PROGRESS_MIN_CONTENT {
+        false
+    } else {
+        return None;
+    };
+    let width = if full {
+        FULL_PROGRESS_WIDTH
+    } else {
+        COMPACT_PROGRESS_WIDTH
+    };
+    let position = match listened {
+        Listened::Finished => {
+            let padding = width.saturating_sub(UnicodeWidthStr::width(FINISHED_LABEL));
+            return Some(ProgressCell {
+                heard: String::new(),
+                rest: format!("{}{FINISHED_LABEL}", " ".repeat(padding)),
+            });
+        }
+        Listened::InProgress(position) => position,
+    };
+    let duration = duration.filter(|duration| !duration.is_zero())?;
+    let percent = (position.as_secs_f64() / duration.as_secs_f64() * 100.0)
+        .floor()
+        .clamp(1.0, 99.0) as usize;
+    let label = format!("{percent}%");
+    if !full {
+        return Some(ProgressCell {
+            heard: String::new(),
+            rest: format!("{label:>COMPACT_PROGRESS_WIDTH$}"),
+        });
+    }
+    let filled = ((percent as f64 / 10.0).round() as usize).min(PROGRESS_BAR_CELLS - 1);
+    let label_width = FULL_PROGRESS_WIDTH - PROGRESS_BAR_CELLS;
+    Some(ProgressCell {
+        heard: "━".repeat(filled),
+        rest: format!(
+            "{}{label:>label_width$}",
+            "─".repeat(PROGRESS_BAR_CELLS - filled)
+        ),
+    })
 }

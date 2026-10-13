@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::player::PlayState;
 use crate::progress::{self, Listened, ProgressStore};
+use crate::track::Track;
 
 use super::App;
 
@@ -76,6 +77,14 @@ impl App {
             self.progress.dirty = true;
             self.progress.urgent = true;
         }
+    }
+
+    /// 曲库里显示的收听进度；只有长录音才有。
+    pub fn listened(&self, track: &Track) -> Option<Listened> {
+        if !progress::is_long(track) {
+            return None;
+        }
+        self.progress.store.get(&track.path)
     }
 
     /// 这一首该从哪里开始：听到一半的长录音从记下的位置继续，其余从头。

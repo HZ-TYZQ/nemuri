@@ -6,6 +6,7 @@ use ratatui::prelude::{Color, Rect};
 use unicode_width::UnicodeWidthStr;
 
 use crate::player::PlayState;
+use crate::progress::Listened;
 use crate::theme::{DEFAULT_THEME, Theme};
 use crate::track::Track;
 
@@ -15,8 +16,8 @@ use super::keymap::{
     QUEUE, SEARCH,
 };
 use super::library::{
-    INACTIVE_ICON, LIST_ICON_WIDTH, PAUSE_ACTION_ICON, PLAY_ACTION_ICON, STOPPED_ICON,
-    duration_column_width, playback_action_indicator, track_row_text,
+    INACTIVE_ICON, LIST_ICON_WIDTH, PAUSE_ACTION_ICON, PLAY_ACTION_ICON, ProgressCell, RowText,
+    STOPPED_ICON, duration_column_width, playback_action_indicator, track_row_text,
 };
 use super::overlays::resolve_queue_rows;
 use super::text::{ascii_progress_bar, fmt_duration, now_playing_text, truncate_display};
@@ -133,19 +134,23 @@ fn track_rows_fill_the_width_and_right_align_the_duration() {
     };
     let duration_width = 7;
     for usable in [22usize, 30, 42, 50, 66, 90] {
-        let (title, duration, detail) = track_row_text(&track, usable, duration_width);
-        let first =
-            UnicodeWidthStr::width(title.as_str()) + UnicodeWidthStr::width(duration.as_str());
+        let row = track_row_text(&track, usable, duration_width, None);
+        let first = UnicodeWidthStr::width(row.title.as_str())
+            + UnicodeWidthStr::width(row.duration.as_str());
         assert_eq!(first + LIST_ICON_WIDTH, usable, "usable={usable}");
-        assert_eq!(duration, "1:01:01");
-        assert!(UnicodeWidthStr::width(detail.as_str()) + LIST_ICON_WIDTH <= usable);
-        assert!(detail.starts_with("歌手"), "详情应以文件夹开头：{detail:?}");
+        assert_eq!(row.duration, "1:01:01");
+        assert!(UnicodeWidthStr::width(row.detail.as_str()) + LIST_ICON_WIDTH <= usable);
+        assert!(
+            row.detail.starts_with("歌手"),
+            "详情应以文件夹开头：{:?}",
+            row.detail
+        );
     }
 
-    let (title, _, detail) = track_row_text(&track, 200, duration_width);
-    assert!(title.starts_with("这是一首名字特别特别长的歌曲标题 "));
+    let row = track_row_text(&track, 200, duration_width, None);
+    assert!(row.title.starts_with("这是一首名字特别特别长的歌曲标题 "));
     assert_eq!(
-        detail,
+        row.detail,
         "歌手 · 一个名字同样很长的歌手 · 一张名字也非常非常长的专辑 · FLAC"
     );
 }
@@ -165,18 +170,103 @@ fn track_row_detail_leads_with_the_folder_and_skips_unknown_fields() {
         file_size: 1,
         modified_ns: 1,
     };
-    let (_, duration, detail) = track_row_text(&track, 60, 5);
-    assert_eq!(duration, "--:--");
-    assert_eq!(detail, "(根目录)");
+    let row = track_row_text(&track, 60, 5, None);
+    assert_eq!(row.duration, "--:--");
+    assert_eq!(row.detail, "(根目录)");
 
     // 文件夹名原样显示，没有歌手标签时直接省略，不写“未知歌手”。
     track.relative_path = PathBuf::from("ASMR(衣鶴)/合集/音频 - 掏耳.flac");
     track.format = Some("FLAC".to_owned());
-    let (_, _, detail) = track_row_text(&track, 60, 5);
-    assert_eq!(detail, "ASMR(衣鶴) · FLAC");
+    assert_eq!(
+        track_row_text(&track, 60, 5, None).detail,
+        "ASMR(衣鶴) · FLAC"
+    );
     track.artist = Some("衣鹤".to_owned());
-    let (_, _, detail) = track_row_text(&track, 60, 5);
-    assert_eq!(detail, "ASMR(衣鶴) · 衣鹤 · FLAC");
+    assert_eq!(
+        track_row_text(&track, 60, 5, None).detail,
+        "ASMR(衣鶴) · 衣鹤 · FLAC"
+    );
+}
+
+fn thirty_minute_recording() -> Track {
+    Track {
+        path: PathBuf::from("/music/ASMR(衣鶴)/音频 - 掏耳合集.flac"),
+        relative_path: PathBuf::from("ASMR(衣鶴)/音频 - 掏耳合集.flac"),
+        title: "x".to_owned(),
+        artist: Some("衣鹤".to_owned()),
+        album: None,
+        duration: Some(Duration::from_secs(30 * 60)),
+        format: Some("FLAC".to_owned()),
+        track_number: None,
+        disc_number: None,
+        file_size: 1,
+        modified_ns: 1,
+    }
+}
+
+/// 第二行的完整文字：详情加进度格。
+fn second_line(row: &RowText) -> String {
+    let progress = row
+        .progress
+        .as_ref()
+        .map_or(String::new(), |cell| format!("{}{}", cell.heard, cell.rest));
+    format!("{}{progress}", row.detail)
+}
+
+#[test]
+fn listened_progress_sits_at_the_right_end_of_the_second_line() {
+    let track = thirty_minute_recording();
+    // 10:39 是 30 分钟的 35.5%：向下取整成 35%，进度条四舍五入成 4 格。
+    let heard = Listened::InProgress(Duration::from_secs(10 * 60 + 39));
+    let row = track_row_text(&track, 63, 7, Some(heard));
+    assert_eq!(
+        row.progress,
+        Some(ProgressCell {
+            heard: "━━━━".to_owned(),
+            rest: "──────  35%".to_owned(),
+        })
+    );
+    let line = second_line(&row);
+    assert_eq!(UnicodeWidthStr::width(line.as_str()), 60);
+    assert!(line.starts_with("ASMR(衣鶴) · 衣鹤 · FLAC  "), "{line:?}");
+
+    let row = track_row_text(&track, 63, 7, Some(Listened::Finished));
+    let line = second_line(&row);
+    assert!(line.ends_with("         ✓ 听完"), "{line:?}");
+    assert_eq!(UnicodeWidthStr::width(line.as_str()), 60);
+}
+
+#[test]
+fn narrow_rows_shrink_the_progress_cell_and_very_narrow_rows_drop_it() {
+    let track = thirty_minute_recording();
+    let heard = Listened::InProgress(Duration::from_secs(10 * 60 + 39));
+    let row = track_row_text(&track, 30, 7, Some(heard));
+    assert_eq!(row.progress.as_ref().unwrap().rest, "   35%");
+    assert_eq!(UnicodeWidthStr::width(second_line(&row).as_str()), 27);
+    assert_eq!(
+        track_row_text(&track, 30, 7, Some(Listened::Finished))
+            .progress
+            .unwrap()
+            .rest,
+        "✓ 听完"
+    );
+    assert_eq!(track_row_text(&track, 18, 7, Some(heard)).progress, None);
+}
+
+#[test]
+fn the_percentage_never_shows_zero_or_a_full_bar_before_the_end() {
+    let track = thirty_minute_recording();
+    let just_started = Listened::InProgress(Duration::from_secs(5));
+    let cell = track_row_text(&track, 63, 7, Some(just_started))
+        .progress
+        .unwrap();
+    assert!(cell.rest.ends_with(" 1%"), "{cell:?}");
+    let almost_done = Listened::InProgress(Duration::from_secs(30 * 60 - 4));
+    let cell = track_row_text(&track, 63, 7, Some(almost_done))
+        .progress
+        .unwrap();
+    assert!(cell.rest.ends_with("99%"), "{cell:?}");
+    assert_eq!(cell.heard.chars().count(), 9);
 }
 
 #[test]

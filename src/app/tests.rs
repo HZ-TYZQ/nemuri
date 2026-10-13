@@ -2518,3 +2518,34 @@ fn progress_follows_a_rename_on_rescan() {
     app.play_path(&renamed, true, BagUpdate::Reanchor).unwrap();
     assert_eq!(app.player().position(), AT_12_34);
 }
+
+#[test]
+fn library_rows_show_listened_progress_for_long_recordings_only() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    // rec1 听到 35%，rec2 听完，100 秒的歌听了一半。
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(Duration::from_secs(7 * 60 + 2)));
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    assert!(
+        app.playback
+            .player
+            .seek_to(20 * MINUTE - Duration::from_secs(1))
+    );
+    app.play_index(2, true, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(Duration::from_secs(50)));
+
+    let (_, backend) = render(&app, 100, 24);
+    let rows = screen_rows(&backend);
+    let line_after = |name: &str| {
+        let at = rows.iter().position(|row| row.contains(name)).unwrap();
+        rows[at + 1].clone()
+    };
+    assert!(line_after("rec1").contains("35%"), "{}", line_after("rec1"));
+    assert!(
+        line_after("rec2").contains("✓听完"),
+        "{}",
+        line_after("rec2")
+    );
+    assert!(!line_after("song").contains('%'), "{}", line_after("song"));
+}
