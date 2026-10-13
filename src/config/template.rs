@@ -38,6 +38,11 @@ interface {{
     mouse {mouse}
 }}
 
+sleep {{
+    // 睡眠定时（t）到点前淡出的秒数，0–600；0 表示不淡出，到点直接暂停
+    fade {fade}
+}}
+
 theme {{
     // 预设："default" 深色终端、"light" 浅色终端、"terminal" 只用终端调色板
     preset "default"
@@ -61,6 +66,7 @@ theme {{
         visualizer = flag(config.visualizer_enabled),
         lyrics = flag(config.lyrics_enabled),
         mouse = flag(config.mouse_enabled),
+        fade = config.sleep_fade.as_secs(),
     )
 }
 
@@ -90,6 +96,7 @@ mod tests {
                 visualizer_enabled: false,
                 mouse_enabled: false,
                 lyrics_enabled: false,
+                sleep_fade: std::time::Duration::from_secs(90),
                 theme: Theme::default(),
             },
         ];

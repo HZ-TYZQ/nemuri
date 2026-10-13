@@ -11,9 +11,8 @@ use crate::player::PlayState;
 use super::App;
 
 /// 按 t 依次切换的定时长度（分钟），之后是“本条播完时”，再回到关闭。
+/// 淡出时长来自配置（`sleep { fade 30 }`）。
 const PRESETS: [u64; 5] = [15, 30, 60, 90, 120];
-/// 到点前用多长时间把音量降到零。
-const FADE: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum SleepTimer {
@@ -43,15 +42,19 @@ impl App {
         };
         // 重新计时意味着还醒着，淡出到一半也恢复原来的音量。
         self.set_fade_gain(1.0);
+        let fade = self.config.sleep_fade.as_secs();
         self.view.message = Some(match self.playback.sleep {
             SleepTimer::Off => "睡眠定时已关闭".to_owned(),
+            SleepTimer::After { minutes, .. } if fade == 0 => {
+                format!("睡眠定时：{minutes} 分钟后暂停（t 切换）")
+            }
             SleepTimer::After { minutes, .. } => {
                 format!("睡眠定时：{minutes} 分钟后淡出并暂停（t 切换）")
             }
-            SleepTimer::EndOfTrack => format!(
-                "睡眠定时：本条播完时停止，最后 {} 秒淡出（t 切换）",
-                FADE.as_secs()
-            ),
+            SleepTimer::EndOfTrack if fade == 0 => "睡眠定时：本条播完时停止（t 切换）".to_owned(),
+            SleepTimer::EndOfTrack => {
+                format!("睡眠定时：本条播完时停止，最后 {fade} 秒淡出（t 切换）")
+            }
         });
     }
 
@@ -82,7 +85,7 @@ impl App {
                 let gain = match self.effective_duration() {
                     Some(duration) if self.playback.player.state() != PlayState::Stopped => {
                         let remaining = duration.saturating_sub(self.playback.player.position());
-                        fade_gain(remaining, FADE)
+                        fade_gain(remaining, self.config.sleep_fade)
                     }
                     _ => 1.0,
                 };
@@ -92,7 +95,7 @@ impl App {
         };
         let remaining = deadline.saturating_duration_since(self.now);
         if !remaining.is_zero() {
-            self.set_fade_gain(fade_gain(remaining, FADE));
+            self.set_fade_gain(fade_gain(remaining, self.config.sleep_fade));
             return;
         }
         let playing = self.playback.player.state() == PlayState::Playing;

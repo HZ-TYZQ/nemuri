@@ -6,6 +6,7 @@
 
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use kdl::{
     KdlDocument, KdlDocumentFormat, KdlEntry, KdlEntryFormat, KdlError, KdlNode, KdlNodeFormat,
@@ -176,6 +177,7 @@ impl Reader<'_> {
                 "playback" => self.playback(node, &mut config),
                 "sort" => self.sort(node, &mut config.sort),
                 "interface" => self.interface(node, &mut config),
+                "sleep" => self.sleep(node, &mut config),
                 "theme" => config.theme = self.theme(node),
                 _ => self.unknown(node),
             }
@@ -237,6 +239,37 @@ impl Reader<'_> {
                 _ => self.unknown(node),
             }
         }
+    }
+
+    fn sleep(&mut self, section: &KdlNode, config: &mut AppConfig) {
+        for node in children(section) {
+            match name(node) {
+                "fade" => {
+                    if let Some(fade) = self.fade(node) {
+                        config.sleep_fade = fade;
+                    }
+                }
+                _ => self.unknown(node),
+            }
+        }
+    }
+
+    /// 淡出的秒数。上限 600 秒，比最短的 15 分钟定时短得多，淡出不会从按下就开始。
+    fn fade(&mut self, node: &KdlNode) -> Option<Duration> {
+        let entry = self.argument(node)?;
+        let seconds = match entry.value() {
+            KdlValue::Integer(value) => {
+                u64::try_from(*value).ok().filter(|seconds| *seconds <= 600)
+            }
+            _ => None,
+        };
+        if seconds.is_none() {
+            self.problem(
+                node,
+                format_args!("fade 的值 {} 应为 0–600 的整数（秒），已忽略", shown(entry)),
+            );
+        }
+        seconds.map(Duration::from_secs)
     }
 
     /// 先取预设，再逐项覆盖。预设名或某项颜色写错时只回退那一处。
@@ -713,6 +746,23 @@ mod tests {
     }
 
     #[test]
+    fn the_sleep_fade_accepts_zero_to_ten_minutes() {
+        let fade = |text: &str| read(&format!("sleep {{\n    fade {text}\n}}\n"));
+        assert_eq!(fade("0").config.sleep_fade, Duration::ZERO);
+        assert_eq!(fade("600").config.sleep_fade, Duration::from_secs(600));
+        for wrong in ["601", "-1", "1.5", "\"30\""] {
+            let loaded = fade(wrong);
+            assert_eq!(loaded.config.sleep_fade, Duration::from_secs(30), "{wrong}");
+            assert_eq!(
+                loaded.message.unwrap(),
+                format!(
+                    "config.kdl 有误: 第 2 行 fade 的值 {wrong} 应为 0–600 的整数（秒），已忽略"
+                ),
+            );
+        }
+    }
+
+    #[test]
     fn every_setting_is_read() {
         let loaded = read(
             r##"
@@ -728,6 +778,9 @@ mod tests {
                 visualizer #false
                 lyrics #false
                 mouse #false
+            }
+            sleep {
+                fade 45
             }
             theme {
                 preset "light"
@@ -753,6 +806,7 @@ mod tests {
                 visualizer_enabled: false,
                 mouse_enabled: false,
                 lyrics_enabled: false,
+                sleep_fade: Duration::from_secs(45),
                 theme,
             }
         );

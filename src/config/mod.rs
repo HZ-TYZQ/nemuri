@@ -10,7 +10,7 @@ mod template;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::theme::Theme;
 use crate::track::{RepeatMode, SortOrder};
@@ -71,6 +71,8 @@ pub struct AppConfig {
     pub visualizer_enabled: bool,
     pub mouse_enabled: bool,
     pub lyrics_enabled: bool,
+    /// 睡眠定时到点前淡出的时长。启动时读取，运行中不会改变，也从不写回。
+    pub sleep_fade: Duration,
     /// 启动时按 `theme {}` 得出，运行中不会改变，也从不写回。
     pub theme: Theme,
 }
@@ -87,6 +89,7 @@ impl Default for AppConfig {
             visualizer_enabled: true,
             mouse_enabled: true,
             lyrics_enabled: true,
+            sleep_fade: Duration::from_secs(30),
             theme: Theme::default(),
         }
     }

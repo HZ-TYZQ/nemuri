@@ -2332,3 +2332,21 @@ fn the_now_playing_bar_marks_a_track_end_timer() {
             .any(|row| row.contains("⏾本条·播完停止"))
     );
 }
+
+#[test]
+fn a_zero_fade_pauses_at_full_volume() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        sleep_fade: Duration::ZERO,
+        ..AppConfig::default()
+    });
+    let start = sleep_fixture(temp.path(), &mut app);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("睡眠定时：15 分钟后暂停（t 切换）")
+    );
+
+    app.tick_timers(start + 15 * MINUTE - Duration::from_secs(1));
+    assert_eq!(control.fade_gain(), 1.0);
+    app.tick_timers(start + 15 * MINUTE);
+    assert_eq!(app.player().state(), PlayState::Paused);
+}
