@@ -93,6 +93,18 @@ loop.
 .B s
 Toggle shuffle. When enabled, the library is played as a reshuffled permutation each round.
 .TP
+.B t
+Cycle the sleep timer among off, 15, 30, 60, 90, and 120 minutes, and the end
+of the current recording. The countdown is shown first in the now playing bar.
+A minute timer runs on wall-clock time, also while paused; over its last 30
+seconds the output fades out, then playback pauses and keeps its position. The
+end-of-recording timer fades out the last 30 seconds of whatever is playing and
+stops when it ends, regardless of the repeat mode and the queue. The fade never
+changes the volume setting; pressing t again restarts the countdown and restores
+full volume. The fade length is set in the
+.B sleep
+block of the configuration.
+.TP
 .B v
 Show or hide the audio spectrum. The choice is restored on the next launch.
 .TP
@@ -110,7 +122,8 @@ artists, and albums.
 Open the folder panel, which lists every top-level folder of the library with
 its track count. Enter shows only the selected folder; the first row shows all
 tracks again. While a folder is chosen, search, sequential playback, repeat,
-and shuffle stay inside it. The choice lasts for the current session.
+and shuffle stay inside it. The choice is restored the next time the same
+library is opened, unless the folder is gone.
 .TP
 .B r
 Rescan the library in the background.
@@ -153,6 +166,9 @@ interface {
     lyrics #true
     mouse #true
 }
+sleep {
+    fade 30             // seconds, 0 to 600; 0 means no fade
+}
 theme {
     preset "light"
     selection-bg "#C8D3F0"
@@ -170,7 +186,8 @@ and mouse switches), in place, keeping comments and layout; settings missing
 from the file are appended to their block. Other edits made while it runs are
 kept.
 .B --set-library
-rewrites only the library line.
+rewrites only the library line. The sleep fade is read at start and never
+written back.
 .PP
 A wrong value or unknown key is ignored on its own and reported with its line
 number in the footer at start-up. A syntax error is reported with its line and
@@ -200,9 +217,16 @@ Library, playback, sort, interface, and theme settings; see
 Independent named playlist files.
 .TP
 .I $XDG_DATA_HOME/tui-music-player/session.toml
-Track and position at the last exit. On the next launch with the same library,
-that track is loaded paused at the saved position; press Space to continue.
-Deleting the file only forgets the position.
+Track, position, and folder filter at the last exit. On the next launch with
+the same library, the folder filter is restored and that track is loaded paused
+at the saved position; press Space to continue. Deleting the file only forgets
+these.
+.TP
+.I $XDG_DATA_HOME/tui-music-player/progress.json
+Listening progress of recordings of 10 minutes or more. Starting such a
+recording continues where it was left unless it was finished; 0 jumps back to
+the start. Library rows show the progress, and a renamed file keeps it after
+the next scan. An unreadable file is renamed aside and a new one is started.
 .TP
 .I $XDG_CACHE_HOME/tui-music-player/library.sqlite3
 Rebuildable incremental music metadata cache.
