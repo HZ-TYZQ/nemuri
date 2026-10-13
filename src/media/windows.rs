@@ -263,9 +263,10 @@ fn read_snapshot(snapshot: &Arc<Mutex<MediaSnapshot>>) -> MediaSnapshot {
         .clone()
 }
 
+/// SMTC 没有“播完停止”，它和顺序播放一样报告为不循环。
 fn smtc_repeat(repeat: RepeatMode) -> MediaPlaybackAutoRepeatMode {
     match repeat {
-        RepeatMode::None => MediaPlaybackAutoRepeatMode::None,
+        RepeatMode::Stop | RepeatMode::None => MediaPlaybackAutoRepeatMode::None,
         RepeatMode::One => MediaPlaybackAutoRepeatMode::Track,
         RepeatMode::All => MediaPlaybackAutoRepeatMode::List,
     }

@@ -128,7 +128,7 @@ impl App {
             }
             Action::ToggleMute => self.toggle_mute(),
             Action::CycleRepeat => self.cycle_repeat(),
-            Action::SetRepeat(repeat) => self.config.repeat = repeat,
+            Action::SetRepeat(repeat) => self.set_repeat(repeat),
             Action::ToggleShuffle => self.toggle_shuffle(),
             Action::SetShuffle(shuffle) => {
                 if shuffle != self.config.shuffle {

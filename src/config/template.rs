@@ -23,7 +23,7 @@ playback {{
     // 音量 0–100
     volume {volume}
     muted {muted}
-    // 循环："none" 不循环、"all" 列表循环、"one" 单曲循环
+    // 循环："stop" 播完停止、"none" 顺序播放、"all" 列表循环、"one" 单曲循环
     repeat "{repeat}"
     shuffle {shuffle}
 }}

@@ -21,7 +21,8 @@ use super::{AppConfig, LoadedConfig};
 const FILE: &str = "config.kdl";
 const INDENT: &str = "    ";
 
-const REPEAT_MODES: [(&str, RepeatMode); 3] = [
+const REPEAT_MODES: [(&str, RepeatMode); 4] = [
+    ("stop", RepeatMode::Stop),
     ("none", RepeatMode::None),
     ("all", RepeatMode::All),
     ("one", RepeatMode::One),
@@ -701,6 +702,17 @@ mod tests {
     }
 
     #[test]
+    fn every_repeat_value_is_read() {
+        for (name, mode) in REPEAT_MODES {
+            let loaded = read(&format!("playback {{\n    repeat \"{name}\"\n}}\n"));
+            assert_eq!(loaded.message, None, "{name}");
+            assert_eq!(loaded.config.repeat, mode, "{name}");
+            assert_eq!(repeat_name(mode), name);
+        }
+        assert_eq!(REPEAT_MODES[0], ("stop", RepeatMode::Stop));
+    }
+
+    #[test]
     fn every_setting_is_read() {
         let loaded = read(
             r##"
@@ -785,7 +797,7 @@ mod tests {
             loaded.message.unwrap(),
             "config.kdl 有误: 第 3 行 volume 的值 150 应为 0–100 的整数，已忽略；\
              第 4 行 muted 的值 \"yes\" 应为 #true 或 #false，已忽略；\
-             第 5 行 repeat 的值 \"forever\" 应为 \"none\"、\"all\"、\"one\" 之一，已忽略；\
+             第 5 行 repeat 的值 \"forever\" 应为 \"stop\"、\"none\"、\"all\"、\"one\" 之一，已忽略；\
              第 7 行 未知项 speed，已忽略；\
              第 9 行 sort 的值 3 应为加双引号的字符串，已忽略；\
              第 9 行 descending 的值 1 应为 #true 或 #false，已忽略；\

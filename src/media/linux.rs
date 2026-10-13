@@ -300,9 +300,10 @@ fn playback_status(snapshot: &MediaSnapshot) -> PlaybackStatus {
     }
 }
 
+/// MPRIS 没有“播完停止”，它和顺序播放一样报告为不循环。
 fn loop_status(repeat: RepeatMode) -> LoopStatus {
     match repeat {
-        RepeatMode::None => LoopStatus::None,
+        RepeatMode::Stop | RepeatMode::None => LoopStatus::None,
         RepeatMode::One => LoopStatus::Track,
         RepeatMode::All => LoopStatus::Playlist,
     }
@@ -405,6 +406,13 @@ mod tests {
             file_uri(Path::new("/home/测试 用户/Music/a#b?.flac")),
             "file:///home/%E6%B5%8B%E8%AF%95%20%E7%94%A8%E6%88%B7/Music/a%23b%3F.flac"
         );
+    }
+
+    #[test]
+    fn stop_after_track_is_reported_as_no_loop() {
+        assert_eq!(loop_status(RepeatMode::Stop), LoopStatus::None);
+        assert_eq!(loop_status(RepeatMode::None), LoopStatus::None);
+        assert_eq!(repeat_mode(LoopStatus::Track), RepeatMode::One);
     }
 
     #[test]

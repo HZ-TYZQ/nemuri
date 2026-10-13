@@ -214,6 +214,9 @@ fn path_fold(track: &Track) -> String {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepeatMode {
+    /// 自然播完一首就停；手动切到下一首照常可用。
+    Stop,
+    /// 按列表顺序播到最后一首再停。
     #[default]
     None,
     All,
@@ -223,14 +226,16 @@ pub enum RepeatMode {
 impl RepeatMode {
     pub fn next(self) -> Self {
         match self {
+            Self::Stop => Self::None,
             Self::None => Self::All,
             Self::All => Self::One,
-            Self::One => Self::None,
+            Self::One => Self::Stop,
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Stop => "播完停止",
             Self::None => "顺序",
             Self::All => "列表循环",
             Self::One => "单曲循环",

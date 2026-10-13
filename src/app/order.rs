@@ -1,4 +1,4 @@
-//! 曲库内的播放顺序：顺序、列表循环、单曲循环和随机袋。
+//! 曲库内的播放顺序：播完停止、顺序、列表循环、单曲循环和随机袋。
 //!
 //! 这里只和曲库下标打交道，不碰播放器、队列和提示，因此能脱离音频单独测试。
 //! 播放范围、当前曲目和播放模式都由调用方传入；随机数源在构造时注入。
@@ -40,8 +40,10 @@ impl PlaybackOrder {
         natural_end: bool,
         mode: PlaybackMode,
     ) -> Option<usize> {
-        if natural_end && mode.repeat == RepeatMode::One {
-            return current;
+        match mode.repeat {
+            RepeatMode::Stop if natural_end => return None,
+            RepeatMode::One if natural_end => return current,
+            _ => {}
         }
         if mode.shuffle {
             return self.next_from_bag(scope, current, mode.repeat);
@@ -52,7 +54,9 @@ impl PlaybackOrder {
             (RepeatMode::All | RepeatMode::One, Some(position)) => {
                 Some(scope[(position + 1) % scope.len()])
             }
-            (RepeatMode::None, Some(position)) => scope.get(position + 1).copied(),
+            (RepeatMode::Stop | RepeatMode::None, Some(position)) => {
+                scope.get(position + 1).copied()
+            }
         }
     }
 
@@ -66,7 +70,7 @@ impl PlaybackOrder {
         if scope.is_empty() {
             return false;
         }
-        if mode.repeat != RepeatMode::None {
+        if matches!(mode.repeat, RepeatMode::All | RepeatMode::One) {
             return true;
         }
         if mode.shuffle {
@@ -124,7 +128,7 @@ impl PlaybackOrder {
         }
         if self.cursor >= self.bag.len() {
             match repeat {
-                RepeatMode::None => return None,
+                RepeatMode::Stop | RepeatMode::None => return None,
                 RepeatMode::All | RepeatMode::One => {
                     let avoid = self.bag.last().copied().or(current);
                     self.reshuffle_round(scope, avoid);
@@ -212,6 +216,22 @@ mod tests {
         // 单曲循环自然播完时重播当前曲，即使它不在范围里。
         let one = mode(RepeatMode::One, false);
         assert_eq!(order.next(&folder, Some(0), true, one), Some(0));
+    }
+
+    #[test]
+    fn stop_ends_after_a_natural_end_but_still_steps_forward_by_hand() {
+        let scope = [0, 1, 2];
+        for shuffle in [false, true] {
+            let mut order = PlaybackOrder::new(3);
+            let stop = mode(RepeatMode::Stop, shuffle);
+            assert_eq!(order.next(&scope, Some(0), true, stop), None, "{shuffle}");
+            // 按 n 或播放出错时照常往后走。
+            let next = order.next(&scope, Some(0), false, stop);
+            assert!(next.is_some_and(|next| next != 0), "{shuffle}");
+            assert!(order.has_next(&scope, Some(0), stop), "{shuffle}");
+        }
+        let order = PlaybackOrder::new(3);
+        assert!(!order.has_next(&scope, Some(2), mode(RepeatMode::Stop, false)));
     }
 
     #[test]

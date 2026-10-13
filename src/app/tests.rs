@@ -2045,3 +2045,89 @@ fn shuffle_reshuffles_inside_the_folder_when_it_changes() {
     }
     assert!(app.media_snapshot().can_go_next);
 }
+
+#[test]
+fn stop_mode_ends_playback_after_a_natural_end_and_says_why() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::Stop,
+        ..AppConfig::default()
+    });
+    folder_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+
+    control.finish_track();
+    app.drain_player_events();
+
+    assert_eq!(app.playback.playing_index, None);
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已播完，播放停止（按 z 切换循环方式）")
+    );
+
+    // 手动切歌照常往后走。
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(1));
+}
+
+#[test]
+fn stop_mode_still_plays_the_queue_after_a_natural_end() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::Stop,
+        ..AppConfig::default()
+    });
+    let paths = folder_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    app.playback.queue.push_back(paths[3].clone());
+
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.playback.playing_index, Some(3));
+
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.playback.playing_index, None);
+}
+
+#[test]
+fn z_cycles_through_all_four_repeat_modes() {
+    let (_temp, mut app) = test_app(AppConfig {
+        repeat: RepeatMode::Stop,
+        ..AppConfig::default()
+    });
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        press(&mut app, key(KeyCode::Char('z')));
+        seen.push(app.view.message.clone().unwrap());
+    }
+    assert_eq!(
+        seen,
+        [
+            "循环：顺序",
+            "循环：列表循环",
+            "循环：单曲循环",
+            "循环：播完停止"
+        ]
+    );
+    assert_eq!(app.config.repeat, RepeatMode::Stop);
+}
+
+#[test]
+fn media_controls_turning_loop_off_keep_or_choose_stop() {
+    let (_temp, mut app) = test_app(AppConfig {
+        repeat: RepeatMode::Stop,
+        ..AppConfig::default()
+    });
+    // 系统媒体控制分不出播完停止和顺序播放，“不循环”不能把其中一种改成另一种。
+    app.dispatch(Action::SetRepeat(RepeatMode::None));
+    assert_eq!(app.config.repeat, RepeatMode::Stop);
+    app.config.repeat = RepeatMode::None;
+    app.dispatch(Action::SetRepeat(RepeatMode::None));
+    assert_eq!(app.config.repeat, RepeatMode::None);
+
+    app.dispatch(Action::SetRepeat(RepeatMode::All));
+    assert_eq!(app.config.repeat, RepeatMode::All);
+    app.dispatch(Action::SetRepeat(RepeatMode::None));
+    assert_eq!(app.config.repeat, RepeatMode::Stop);
+}

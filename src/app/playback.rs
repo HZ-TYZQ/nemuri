@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::player::PlayState;
-use crate::track::PlaybackMode;
+use crate::track::{PlaybackMode, RepeatMode};
 
 use super::{App, BagUpdate};
 
@@ -172,6 +172,10 @@ impl App {
             let Some(next) = self.next_library_index_from(library_cursor, natural_end) else {
                 self.playback.player.stop();
                 self.playback.playing_index = None;
+                // 默认的循环方式会在每首播完时停下，说明原因，免得以为出了故障。
+                if natural_end && self.config.repeat == RepeatMode::Stop {
+                    self.view.message = Some("已播完，播放停止（按 z 切换循环方式）".to_owned());
+                }
                 self.report_skipped(&skipped);
                 return;
             };
@@ -302,6 +306,17 @@ impl App {
             }
             .to_owned(),
         );
+    }
+
+    /// 系统媒体控制只有“不循环”，分不出播完停止和顺序播放：
+    /// 已经是这两种之一时保持不变，从循环切过来时用播完停止。
+    pub(super) fn set_repeat(&mut self, repeat: RepeatMode) {
+        let looping = matches!(self.config.repeat, RepeatMode::All | RepeatMode::One);
+        self.config.repeat = match repeat {
+            RepeatMode::Stop | RepeatMode::None if !looping => self.config.repeat,
+            RepeatMode::Stop | RepeatMode::None => RepeatMode::Stop,
+            looping @ (RepeatMode::All | RepeatMode::One) => looping,
+        };
     }
 
     pub(super) fn cycle_repeat(&mut self) {

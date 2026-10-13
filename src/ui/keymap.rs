@@ -167,7 +167,7 @@ pub(super) const LIBRARY: &[Binding] = &[
     ),
     listed(
         "z",
-        "循环方式：顺序 / 列表 / 单曲",
+        "循环方式：播完停止 / 顺序 / 列表 / 单曲",
         &[(ch('z'), Action::CycleRepeat)],
     ),
     listed("s", "开 / 关随机播放", &[(ch('s'), Action::ToggleShuffle)]),
