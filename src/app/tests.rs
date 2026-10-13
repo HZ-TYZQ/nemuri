@@ -2549,3 +2549,58 @@ fn library_rows_show_listened_progress_for_long_recordings_only() {
     );
     assert!(!line_after("song").contains('%'), "{}", line_after("song"));
 }
+
+#[test]
+fn the_folder_filter_comes_back_after_a_restart() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+    let tracks = app.catalog.tracks().to_vec();
+    // 没有在播放也要记住筛选。
+    choose_folder(&mut app, 2);
+    app.save_session().unwrap();
+    drop(app);
+
+    let mut app = app_in(temp.path(), "music", AppConfig::default());
+    app.apply_scan_finished(tracks.clone(), Vec::new());
+    settle_search_and_selection(&mut app);
+    assert_eq!(app.catalog.folder(), Some(&named("b")));
+    assert_eq!(app.visible_indices().len(), 2);
+    // 恢复是安静的，不覆盖扫描完成的提示。
+    assert_eq!(app.view.message.as_deref(), Some("扫描完成，共 5 首歌曲"));
+
+    // 换到别的音乐库不恢复这个库的筛选。
+    app.save_session().unwrap();
+    drop(app);
+    std::fs::create_dir(temp.path().join("elsewhere")).unwrap();
+    let mut app = app_in(temp.path(), "elsewhere", AppConfig::default());
+    app.apply_scan_finished(tracks, Vec::new());
+    assert_eq!(app.catalog.folder(), None);
+}
+
+#[test]
+fn a_remembered_folder_that_is_gone_shows_everything() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+    let tracks = app.catalog.tracks().to_vec();
+    choose_folder(&mut app, 2);
+    app.save_session().unwrap();
+    drop(app);
+
+    let without_b: Vec<Track> = tracks
+        .into_iter()
+        .filter(|track| Folder::of(track) != named("b"))
+        .collect();
+    let mut app = app_in(temp.path(), "music", AppConfig::default());
+    app.apply_scan_finished(without_b, Vec::new());
+    assert_eq!(app.catalog.folder(), None);
+    assert_eq!(app.visible_indices().len(), 3);
+
+    // 退出时既没有曲目也没有筛选：会话文件被清掉。
+    app.save_session().unwrap();
+    assert!(
+        !temp
+            .path()
+            .join("data/tui-music-player/session.toml")
+            .exists()
+    );
+}

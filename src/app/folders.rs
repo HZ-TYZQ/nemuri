@@ -40,7 +40,7 @@ impl App {
     /// 曲目下标不受筛选影响，只有可见列表和光标需要跟着变。
     /// 光标优先留在原来选中的曲目上；它不在新文件夹里时落到正在播放的曲目，
     /// 两者都不在时回到第一行。
-    fn set_folder(&mut self, folder: Option<Folder>) {
+    pub(super) fn set_folder(&mut self, folder: Option<Folder>) {
         let kept = |track: &Track| {
             folder
                 .as_ref()
