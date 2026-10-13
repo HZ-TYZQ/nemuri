@@ -143,6 +143,8 @@ lofty = "0.25.1"
      Windows 需带 opus 构建——轻度打破「纯 Rust 无 runtime」）；
   b) 等/推 rodio 上 symphonia 0.6 + `symphonia-adapter-libopus`（该 adapter 需
      symphonia 0.6，rodio 0.22.2 用不了；rodio 是否有 0.6 底座版本**待验证**）；
+     > 2026-10-13 更正：adapter 0.2.x 基于 symphonia-core 0.5，不必等 symphonia 0.6；
+     > rodio master 已用它加了 `symphonia-libopus`，但尚未发布，见 `asmr-pivot-plan.md` 第 5 节。
   c) 首版砍掉 Opus，UI 里标记「暂不支持」。
 - **WMA**：建议归入「可以移除」（老旧格式；Lofty 对 ffmpeg 混流 ASF 都失败）。
 - **APE**：建议「可以移除」，但**必须显式拒绝**（防止上述假阳性静默播 0.7s）。
