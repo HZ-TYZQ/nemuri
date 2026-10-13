@@ -18,6 +18,7 @@ struct FakeState {
     position: Duration,
     volume: u8,
     muted: bool,
+    fade_gain: f32,
     output_down: bool,
     recovering: bool,
     events: Vec<PlayerEvent>,
@@ -39,6 +40,7 @@ impl FakeBackend {
             position: Duration::ZERO,
             volume: 100,
             muted: false,
+            fade_gain: 1.0,
             output_down: false,
             recovering: false,
             events: Vec::new(),
@@ -67,6 +69,11 @@ impl FakeBackend {
 }
 
 impl FakeControl {
+    /// 睡眠定时最近一次设置的淡出增益。
+    pub(crate) fn fade_gain(&self) -> f32 {
+        self.0.borrow().fade_gain
+    }
+
     /// 当前曲目自然播完。
     pub(crate) fn finish_track(&self) {
         let mut state = self.0.borrow_mut();
@@ -172,6 +179,10 @@ impl PlaybackBackend for FakeBackend {
 
     fn set_muted(&mut self, muted: bool) {
         self.shared.borrow_mut().muted = muted;
+    }
+
+    fn set_fade_gain(&mut self, gain: f32) {
+        self.shared.borrow_mut().fade_gain = gain;
     }
 
     fn set_spectrum_enabled(&mut self, _enabled: bool) {}

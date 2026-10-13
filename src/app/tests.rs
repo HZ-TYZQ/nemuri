@@ -2136,3 +2136,128 @@ fn media_controls_turning_loop_off_keep_or_choose_stop() {
     app.dispatch(Action::SetRepeat(RepeatMode::None));
     assert_eq!(app.config.repeat, RepeatMode::Stop);
 }
+
+const MINUTE: Duration = Duration::from_secs(60);
+
+/// 正在播放、停在 0.5 秒处的一首歌，音量 80。返回定时开始的时间。
+fn sleep_fixture(temp: &Path, app: &mut App) -> Instant {
+    folder_fixture(app, &temp.join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(Duration::from_millis(500)));
+    let start = app.now;
+    press(app, key(KeyCode::Char('t')));
+    start
+}
+
+fn sleep_config() -> AppConfig {
+    AppConfig {
+        volume: 80,
+        ..AppConfig::default()
+    }
+}
+
+#[test]
+fn t_cycles_through_the_sleep_timer_presets() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    let mut seen = Vec::new();
+    for _ in 0..6 {
+        press(&mut app, key(KeyCode::Char('t')));
+        seen.push(app.view.message.clone().unwrap());
+    }
+    assert_eq!(
+        seen,
+        [
+            "睡眠定时：15 分钟后淡出并暂停（t 切换）",
+            "睡眠定时：30 分钟后淡出并暂停（t 切换）",
+            "睡眠定时：60 分钟后淡出并暂停（t 切换）",
+            "睡眠定时：90 分钟后淡出并暂停（t 切换）",
+            "睡眠定时：120 分钟后淡出并暂停（t 切换）",
+            "睡眠定时已关闭",
+        ]
+    );
+    assert_eq!(app.sleep_remaining(), None);
+}
+
+#[test]
+fn the_sleep_timer_fades_out_then_pauses_without_touching_the_volume() {
+    let (temp, mut app, control) = test_app_with_control(sleep_config());
+    let start = sleep_fixture(temp.path(), &mut app);
+    assert_eq!(app.sleep_remaining(), Some(15 * MINUTE));
+
+    app.tick_timers(start + 14 * MINUTE);
+    assert_eq!(control.fade_gain(), 1.0);
+    // 还剩 15 秒，即淡出段的一半：增益是一半的平方。
+    app.tick_timers(start + 14 * MINUTE + Duration::from_secs(45));
+    assert_eq!(control.fade_gain(), 0.25);
+    assert_eq!(app.player().state(), PlayState::Playing);
+    assert_eq!(app.sleep_remaining(), Some(Duration::from_secs(15)));
+
+    app.tick_timers(start + 15 * MINUTE);
+    assert_eq!(app.player().state(), PlayState::Paused);
+    assert_eq!(app.player().position(), Duration::from_millis(500));
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(app.sleep_remaining(), None);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("睡眠定时到，已暂停（按空格继续）")
+    );
+    // 淡出只动增益，用户音量、配置和系统媒体控制看到的都是原来的 80。
+    assert_eq!(app.player().volume(), 80);
+    assert_eq!(app.config.volume, 80);
+}
+
+#[test]
+fn a_timer_that_ends_while_paused_just_switches_off() {
+    let (temp, mut app, control) = test_app_with_control(sleep_config());
+    let start = sleep_fixture(temp.path(), &mut app);
+    app.tick_timers(start + 14 * MINUTE + Duration::from_secs(50));
+    assert!(control.fade_gain() < 1.0);
+
+    press(&mut app, key(KeyCode::Char(' ')));
+    assert_eq!(app.player().state(), PlayState::Paused);
+    app.tick_timers(start + 15 * MINUTE);
+
+    assert_eq!(app.player().state(), PlayState::Paused);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(app.sleep_remaining(), None);
+    assert_eq!(app.view.message.as_deref(), Some("睡眠定时已到"));
+}
+
+#[test]
+fn changing_tracks_keeps_the_fade_and_t_restores_full_volume() {
+    let (temp, mut app, control) = test_app_with_control(sleep_config());
+    let start = sleep_fixture(temp.path(), &mut app);
+    let fading = start + 14 * MINUTE + Duration::from_secs(45);
+    app.tick_timers(fading);
+
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.fade_gain(), 0.25);
+
+    // 重新计时说明人还醒着，立即恢复音量，倒计时从现在算起。
+    press(&mut app, key(KeyCode::Char('t')));
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(app.sleep_remaining(), Some(30 * MINUTE));
+    app.tick_timers(fading + MINUTE);
+    assert_eq!(control.fade_gain(), 1.0);
+}
+
+#[test]
+fn the_now_playing_bar_shows_the_sleep_countdown_first() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    press(&mut app, key(KeyCode::Char('t')));
+
+    let (_, backend) = render(&app, 100, 24);
+    assert!(
+        screen_rows(&backend)
+            .iter()
+            .any(|row| row.contains("⏾15:00·播完停止·100%·队列0"))
+    );
+    // 窄终端里这一栏被挤短，截掉的是末尾，倒计时仍然可见。
+    let (_, backend) = render(&app, 50, 24);
+    assert!(
+        screen_rows(&backend)
+            .iter()
+            .any(|row| row.contains("⏾15:00"))
+    );
+}

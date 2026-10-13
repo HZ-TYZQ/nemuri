@@ -172,6 +172,12 @@ pub(super) const LIBRARY: &[Binding] = &[
     ),
     listed("s", "开 / 关随机播放", &[(ch('s'), Action::ToggleShuffle)]),
     hinted(
+        "t",
+        "睡眠定时：关 / 15–120 分钟",
+        "t 定时",
+        &[(ch('t'), Action::CycleSleepTimer)],
+    ),
+    hinted(
         "v / y",
         "显示 / 隐藏频谱 / 歌词",
         "v 频谱",

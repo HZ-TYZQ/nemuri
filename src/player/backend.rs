@@ -55,6 +55,8 @@ pub struct Player {
     generation: Arc<AtomicU64>,
     logical_volume: AtomicU8,
     muted: AtomicBool,
+    /// 睡眠定时淡出时的增益，与用户音量相乘。
+    fade_gain: f32,
     spectrum_enabled: Arc<AtomicBool>,
     spectrum_live: Arc<AtomicBool>,
     is_playing: AtomicBool,
@@ -157,6 +159,7 @@ impl Player {
             generation,
             logical_volume: AtomicU8::new(100),
             muted: AtomicBool::new(false),
+            fade_gain: 1.0,
             spectrum_enabled,
             spectrum_live,
             is_playing: AtomicBool::new(false),
@@ -347,12 +350,11 @@ impl Player {
     }
 
     fn apply_volume(&self) {
-        let volume = if self.muted.load(Ordering::Relaxed) {
-            0.0
-        } else {
-            f32::from(self.logical_volume.load(Ordering::Relaxed)) / 100.0
-        };
-        self.backend.set_volume(volume);
+        self.backend.set_volume(output_volume(
+            self.logical_volume.load(Ordering::Relaxed),
+            self.muted.load(Ordering::Relaxed),
+            self.fade_gain,
+        ));
     }
 
     fn refresh_spectrum_live(&self) {
@@ -499,6 +501,11 @@ impl PlaybackBackend for Player {
         self.apply_volume();
     }
 
+    fn set_fade_gain(&mut self, gain: f32) {
+        self.fade_gain = gain;
+        self.apply_volume();
+    }
+
     fn set_spectrum_enabled(&mut self, enabled: bool) {
         self.spectrum_enabled.store(enabled, Ordering::Relaxed);
         self.refresh_spectrum_live();
@@ -514,6 +521,7 @@ impl PlaybackBackend for Player {
                 Ok(Ok(mut player)) => {
                     player.set_volume(self.volume());
                     player.set_muted(self.is_muted());
+                    player.set_fade_gain(self.fade_gain);
                     player.set_spectrum_enabled(self.spectrum_enabled.load(Ordering::Relaxed));
                     player.resume();
                     *self = *player;
@@ -702,6 +710,20 @@ fn classify_source_end(position: Duration, duration: Option<Duration>) -> Source
     }
 }
 
+/// 交给 Rodio 的输出音量：用户音量（0–100）乘以淡出增益，静音时为 0。
+/// 增益夹在 0–1 之间；不是有限数时当作 1，宁可不淡出也不要突然变响或无声。
+fn output_volume(volume: u8, muted: bool, fade_gain: f32) -> f32 {
+    if muted {
+        return 0.0;
+    }
+    let gain = if fade_gain.is_finite() {
+        fade_gain.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    f32::from(volume.min(100)) / 100.0 * gain
+}
+
 fn clamp_seek_target(target: Duration, duration: Option<Duration>) -> Duration {
     match duration {
         Some(duration) if duration <= SEEK_END_GUARD => Duration::ZERO,
@@ -762,6 +784,16 @@ mod tests {
             classify_source_end(Duration::from_secs(3), None),
             SourceEndKind::EndOfStream
         );
+    }
+
+    #[test]
+    fn fade_gain_scales_the_user_volume_and_never_amplifies() {
+        assert_eq!(output_volume(80, false, 1.0), 0.8);
+        assert_eq!(output_volume(80, false, 0.5), 0.4);
+        assert_eq!(output_volume(80, true, 1.0), 0.0);
+        assert_eq!(output_volume(80, false, 2.0), 0.8);
+        assert_eq!(output_volume(80, false, -1.0), 0.0);
+        assert_eq!(output_volume(80, false, f32::NAN), 0.8);
     }
 
     #[test]

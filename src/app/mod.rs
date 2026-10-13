@@ -11,6 +11,7 @@ mod playlists;
 mod queue;
 mod selection;
 mod session;
+mod sleep;
 mod sorting;
 mod state;
 
@@ -18,7 +19,7 @@ mod state;
 mod tests;
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::{AppConfig, AppPaths};
 use crate::library::{LibraryEvent, LibraryWorker};
@@ -78,6 +79,9 @@ pub struct App {
     save_config_on_exit: bool,
     /// 上次退出时的曲目与位置，等第一次扫描完成、曲库就绪后再恢复。
     pending_session: Option<Session>,
+    /// 最近一次 tick 的时间。按键在两次 tick 之间处理，定时以它为准，
+    /// 误差不超过一个 tick（几十毫秒）。
+    now: Instant,
 }
 
 impl App {
@@ -136,6 +140,7 @@ impl App {
             should_quit: false,
             save_config_on_exit,
             pending_session,
+            now: Instant::now(),
         })
     }
 
@@ -202,17 +207,24 @@ impl App {
             .and_then(|index| self.catalog.get(index))
     }
 
-    pub fn on_tick(&mut self) {
+    pub fn on_tick(&mut self, now: Instant) {
         self.drain_library_events();
         self.sync_lyrics();
         self.catalog.tick_search();
         self.restore_pending_selection();
         self.clamp_selections();
         self.drain_player_events();
+        self.tick_timers(now);
 
         if self.config.visualizer_enabled && self.playback.player.state() != PlayState::Playing {
             self.playback.spectrum.fade_step();
         }
+    }
+
+    /// 随时间推进的状态：睡眠定时。与扫描、搜索分开，测试可以只推进时间。
+    pub(super) fn tick_timers(&mut self, now: Instant) {
+        self.now = now;
+        self.tick_sleep();
     }
 
     fn drain_library_events(&mut self) {

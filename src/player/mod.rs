@@ -53,6 +53,9 @@ pub trait PlaybackBackend {
     fn set_volume(&mut self, percent: u8);
     fn is_muted(&self) -> bool;
     fn set_muted(&mut self, muted: bool);
+    /// 淡出用的增益（0.0–1.0），与用户音量相乘后输出。它不改变 `volume()`，
+    /// 因此不会被写回配置、报告给系统媒体控制或显示在界面上。
+    fn set_fade_gain(&mut self, gain: f32);
     fn set_spectrum_enabled(&mut self, enabled: bool);
     /// 音频输出中断、等待恢复时为 true。
     fn output_unavailable(&self) -> bool;

@@ -39,6 +39,8 @@ pub enum Action {
     SetRepeat(RepeatMode),
     ToggleShuffle,
     SetShuffle(bool),
+    /// 睡眠定时切换到下一档：关、15–120 分钟。
+    CycleSleepTimer,
 
     // 显示与曲库
     ToggleVisualizer,
@@ -135,6 +137,7 @@ impl App {
                     self.toggle_shuffle();
                 }
             }
+            Action::CycleSleepTimer => self.cycle_sleep_timer(),
             Action::ToggleVisualizer => self.toggle_visualizer(),
             Action::ToggleLyrics => self.toggle_lyrics(),
             Action::ToggleMouse => self.toggle_mouse(),

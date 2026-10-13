@@ -13,6 +13,7 @@ use crate::spectrum::SpectrumProcessor;
 
 use super::Overlay;
 use super::order::PlaybackOrder;
+use super::sleep::SleepTimer;
 
 /// 播放后端、当前曲目、队列与历史、播放顺序，以及跟着当前曲目走的歌词和频谱。
 pub struct Playback {
@@ -29,6 +30,9 @@ pub struct Playback {
     pub(super) lyrics: Option<(PathBuf, Option<Lyrics>)>,
     /// 等待交给系统媒体会话的事件。
     pub(super) media_events: Vec<MediaEvent>,
+    pub(super) sleep: SleepTimer,
+    /// 最近一次交给后端的淡出增益，没变时不重复设置。
+    pub(super) fade_gain: f32,
 }
 
 impl Playback {
@@ -42,6 +46,8 @@ impl Playback {
             spectrum: SpectrumProcessor::new(),
             lyrics: None,
             media_events: Vec::new(),
+            sleep: SleepTimer::Off,
+            fade_gain: 1.0,
         }
     }
 }

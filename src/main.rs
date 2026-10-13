@@ -1,6 +1,6 @@
 use std::io::{self, stdout};
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Parser;
 use crossterm::event::{
@@ -131,7 +131,7 @@ fn run(
                 app.dispatch(command.into());
             }
         }
-        app.on_tick();
+        app.on_tick(Instant::now());
         if let Some(session) = session {
             session.publish(app.media_snapshot());
             for event in app.drain_media_events() {

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 use crate::theme::Theme;
@@ -53,8 +54,27 @@ pub(super) fn draw_now_playing(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
+    let volume = if app.player().is_muted() {
+        "静音".to_owned()
+    } else {
+        format!("{}%", app.player().volume())
+    };
+    // 睡眠定时放在最前面：这一栏放不下时先被截掉的是末尾的队列数。
+    let sleep = app
+        .sleep_remaining()
+        .map(|remaining| format!("⏾ {} · ", fmt_duration(remaining)))
+        .unwrap_or_default();
+    let status = format!(
+        "{sleep}{} · {} · 队列 {}",
+        app.playback_mode().label(),
+        volume,
+        app.playback().queue.len()
+    );
+    let status_width = (UnicodeWidthStr::width(status.as_str()) as u16).max(38);
+
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(inner);
-    let top = Layout::horizontal([Constraint::Min(10), Constraint::Length(38)]).split(rows[0]);
+    let top =
+        Layout::horizontal([Constraint::Min(10), Constraint::Length(status_width)]).split(rows[0]);
     let now = match app.current_track() {
         Some(track) => {
             let (icon, style) = playback_action_indicator(app.player().state(), theme);
@@ -77,20 +97,10 @@ pub(super) fn draw_now_playing(
     };
     frame.render_widget(Paragraph::new(now), top[0]);
 
-    let volume = if app.player().is_muted() {
-        "静音".to_owned()
-    } else {
-        format!("{}%", app.player().volume())
-    };
     frame.render_widget(
-        Paragraph::new(format!(
-            "{} · {} · 队列 {}",
-            app.playback_mode().label(),
-            volume,
-            app.playback().queue.len()
-        ))
-        .alignment(Alignment::Right)
-        .style(Style::new().fg(theme.muted)),
+        Paragraph::new(status)
+            .alignment(Alignment::Right)
+            .style(Style::new().fg(theme.muted)),
         top[1],
     );
 
