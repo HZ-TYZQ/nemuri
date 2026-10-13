@@ -2350,3 +2350,145 @@ fn a_zero_fade_pauses_at_full_volume() {
     app.tick_timers(start + 15 * MINUTE);
     assert_eq!(app.player().state(), PlayState::Paused);
 }
+
+/// 两段 20 分钟的录音和一首 100 秒的歌，文件都写出来。
+fn recordings_fixture(app: &mut App, music: &Path) -> Vec<PathBuf> {
+    let mut tracks: Vec<Track> = ["A/rec1.wav", "A/rec2.wav", "Music/song.wav"]
+        .into_iter()
+        .map(|relative| nested_track(music, relative))
+        .collect();
+    tracks[0].duration = Some(20 * MINUTE);
+    tracks[1].duration = Some(20 * MINUTE);
+    tracks[2].duration = Some(Duration::from_secs(100));
+    for item in &tracks {
+        std::fs::create_dir_all(item.path.parent().unwrap()).unwrap();
+        write_test_wav(&item.path);
+    }
+    let paths = tracks.iter().map(|item| item.path.clone()).collect();
+    app.catalog.set_tracks(tracks);
+    paths
+}
+
+const AT_12_34: Duration = Duration::from_secs(12 * 60 + 34);
+
+#[test]
+fn a_long_recording_resumes_where_it_was_left() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(AT_12_34));
+
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(app.player().position(), Duration::ZERO);
+    assert_eq!(app.view.message, None);
+
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), AT_12_34);
+    assert_eq!(app.player().state(), PlayState::Playing);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("从 12:34 继续（按 0 从头播放）")
+    );
+
+    // 0 跳回开头；再离开时这一条算没开始听，下次从头放。
+    press(&mut app, key(KeyCode::Char('0')));
+    assert_eq!(app.player().position(), Duration::ZERO);
+    app.dispatch(Action::Next);
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), Duration::ZERO);
+}
+
+#[test]
+fn resume_works_through_the_queue_and_previous() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(AT_12_34));
+
+    // p 回到历史里的上一条。
+    app.dispatch(Action::Next);
+    app.dispatch(Action::Previous);
+    assert_eq!(app.playback.playing_index, Some(0));
+    assert_eq!(app.player().position(), AT_12_34);
+
+    // 排进队列的录音在自然播完后接着放，也从记下的位置开始。
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    app.playback.queue.push_back(paths[0].clone());
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.playback.playing_index, Some(0));
+    assert_eq!(app.player().position(), AT_12_34);
+}
+
+#[test]
+fn songs_and_finished_recordings_start_from_the_beginning() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::One,
+        ..AppConfig::default()
+    });
+    recordings_fixture(&mut app, &temp.path().join("music"));
+
+    // 100 秒的歌不记进度。
+    app.play_index(2, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(Duration::from_secs(50)));
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    app.play_index(2, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), Duration::ZERO);
+
+    // 停在离结尾不到 3 秒处离开，算听完。
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert!(
+        app.playback
+            .player
+            .seek_to(20 * MINUTE - Duration::from_secs(2))
+    );
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), Duration::ZERO);
+
+    // 单曲循环自然播完后从头重播，而不是回到播完前记下的位置。
+    assert!(app.playback.player.seek_to(AT_12_34));
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.playback.playing_index, Some(0));
+    assert_eq!(app.player().position(), Duration::ZERO);
+}
+
+#[test]
+fn progress_is_written_every_30_seconds_or_at_once_when_playback_stops() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    let file = temp.path().join("data/tui-music-player/progress.json");
+    let start = app.now;
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(AT_12_34));
+
+    app.tick_timers(start + Duration::from_secs(10));
+    assert!(!file.exists(), "30 秒内不写盘");
+    app.tick_timers(start + Duration::from_secs(31));
+    assert!(std::fs::read_to_string(&file).unwrap().contains("754000"));
+
+    // 暂停后的下一个 tick 立刻写，不等满 30 秒。
+    assert!(app.playback.player.seek_to(AT_12_34 + MINUTE));
+    app.tick_timers(start + Duration::from_secs(32));
+    press(&mut app, key(KeyCode::Char(' ')));
+    app.tick_timers(start + Duration::from_secs(33));
+    assert!(std::fs::read_to_string(&file).unwrap().contains("814000"));
+}
+
+#[test]
+fn progress_survives_a_restart() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(AT_12_34));
+    app.save_progress().unwrap();
+
+    let mut restarted = app_in(temp.path(), "music", AppConfig::default());
+    recordings_fixture(&mut restarted, &temp.path().join("music"));
+    restarted
+        .play_path(&paths[0], false, BagUpdate::Reanchor)
+        .unwrap();
+    assert_eq!(restarted.player().position(), AT_12_34);
+}

@@ -1,9 +1,10 @@
 //! 播放、临时队列、历史与随机播放行为。
 
 use std::path::Path;
+use std::time::Duration;
 
 use crate::player::PlayState;
-use crate::track::{PlaybackMode, RepeatMode};
+use crate::track::{PlaybackMode, RepeatMode, fmt_duration};
 
 use super::{App, BagUpdate};
 
@@ -84,14 +85,12 @@ impl App {
             .then(|| self.current_track().map(|track| track.path.clone()))
             .flatten()
             .filter(|current| *current != path);
+        // 先记下正在放的这一条停在哪里，再换；换的若是同一条，就接着放。
+        self.note_progress();
         let autoplay = self.playback.player.state() != PlayState::Paused;
-        let result = if autoplay {
-            self.playback.player.play(&path)
-        } else {
-            self.playback.player.open(&path)
-        };
-        match result {
-            Ok(()) => {
+        let start = self.resume_point(index);
+        match self.load_track(&path, autoplay, start) {
+            Ok(resumed) => {
                 // 只有切歌成功后才改动历史与频谱状态；加载失败时旧曲仍是当前曲目。
                 if let Some(previous) = previous {
                     self.playback.history.push(previous);
@@ -99,7 +98,8 @@ impl App {
                 // 保留已收敛的 sensitivity，重新进入 fast-adapt（见 spectrum.rs）。
                 self.playback.spectrum.on_track_change();
                 self.playback.playing_index = Some(index);
-                self.view.message = None;
+                self.view.message = resumed
+                    .map(|position| format!("从 {} 继续（按 0 从头播放）", fmt_duration(position)));
                 if let Some(visible) = self
                     .visible_indices()
                     .iter()
@@ -118,6 +118,31 @@ impl App {
                 short_reason(&error, &path),
             )),
         }
+    }
+
+    /// 装载曲目：`start` 有值时从那里开始，播放中切歌时接着播放、暂停中只装载。
+    /// 从中间装载失败（例如文件被剪短）时退回从头装载。返回实际续播的位置。
+    fn load_track(
+        &mut self,
+        path: &Path,
+        autoplay: bool,
+        start: Option<Duration>,
+    ) -> Result<Option<Duration>, String> {
+        let player = &mut self.playback.player;
+        if let Some(position) = start
+            && player.open_at(path, position).is_ok()
+        {
+            if autoplay {
+                player.resume();
+            }
+            return Ok(Some(position));
+        }
+        if autoplay {
+            player.play(path)
+        } else {
+            player.open(path)
+        }
+        .map(|()| None)
     }
 
     pub(super) fn play_path(
@@ -170,6 +195,7 @@ impl App {
                 continue;
             }
             let Some(next) = self.next_library_index_from(library_cursor, natural_end) else {
+                self.note_progress();
                 self.playback.player.stop();
                 self.playback.playing_index = None;
                 // 默认的循环方式会在每首播完时停下，说明原因，免得以为出了故障。
@@ -192,6 +218,7 @@ impl App {
             library_cursor = Some(next);
             natural_end = false;
         }
+        self.note_progress();
         self.playback.player.stop();
         self.playback.playing_index = None;
         self.view.message = Some(no_playable_message("下一首", skipped.len()));

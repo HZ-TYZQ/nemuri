@@ -24,6 +24,8 @@ pub struct AppPaths {
     pub legacy_config_file: PathBuf,
     pub playlists_dir: PathBuf,
     pub session_file: PathBuf,
+    /// 长录音各自的收听进度。
+    pub progress_file: PathBuf,
     pub cache_db: PathBuf,
     pub default_music_dir: Option<PathBuf>,
 }
@@ -47,6 +49,7 @@ impl AppPaths {
             legacy_config_file: config.join(APP_DIR).join("config.toml"),
             playlists_dir: data.join(APP_DIR).join("playlists"),
             session_file: data.join(APP_DIR).join("session.toml"),
+            progress_file: data.join(APP_DIR).join("progress.json"),
             cache_db: cache.join(APP_DIR).join("library.sqlite3"),
             default_music_dir: music,
         }
@@ -235,6 +238,10 @@ mod tests {
         assert_eq!(
             paths.session_file,
             PathBuf::from("/data/tui-music-player/session.toml")
+        );
+        assert_eq!(
+            paths.progress_file,
+            PathBuf::from("/data/tui-music-player/progress.json")
         );
         assert_eq!(paths.default_music_dir, Some(PathBuf::from("/music")));
     }

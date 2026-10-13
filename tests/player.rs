@@ -324,6 +324,29 @@ fn open_loads_paused_without_starting_playback() {
 }
 
 #[test]
+fn open_at_then_resume_plays_on_from_the_saved_position() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("resume.wav");
+    write_test_wav(&wav, 3.0);
+    let mut player = Player::new_for_tests().unwrap();
+    player.open_at(&wav, Duration::from_millis(1500)).unwrap();
+    assert_eq!(player.state(), PlayState::Paused);
+
+    player.resume();
+    assert_eq!(player.state(), PlayState::Playing);
+    // 和界面一样每帧读一次位置：装载后的头一次读取要在 100ms 的信任窗口内。
+    let mut position = player.position();
+    for _ in 0..5 {
+        sleep(Duration::from_millis(40));
+        position = player.position();
+    }
+    assert!(
+        position > Duration::from_millis(1600) && position < Duration::from_millis(2300),
+        "续播应从 1.5s 往后走，实际 {position:?}"
+    );
+}
+
+#[test]
 fn seek_to_moves_to_requested_position() {
     let temp = tempfile::tempdir().unwrap();
     let wav = temp.path().join("seek.wav");

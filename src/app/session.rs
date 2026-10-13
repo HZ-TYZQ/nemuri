@@ -3,12 +3,10 @@
 use std::time::Duration;
 
 use crate::player::PlayState;
+use crate::progress::NEAR_END;
 use crate::session::Session;
 
 use super::App;
-
-/// 离结尾这么近时视为已经听完，恢复时从头开始。
-const NEAR_END: Duration = Duration::from_secs(3);
 
 impl App {
     /// 在第一次扫描完成后调用：曲库就绪才能按路径找到曲目。

@@ -6,6 +6,7 @@ pub mod lyrics;
 pub mod media;
 pub mod player;
 pub mod playlist;
+pub mod progress;
 pub mod search;
 pub mod session;
 pub mod spectrum;

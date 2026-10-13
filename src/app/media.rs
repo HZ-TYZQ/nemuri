@@ -26,6 +26,8 @@ impl App {
         if let Some(duration) = self.effective_duration()
             && requested > duration_as_micros(duration)
         {
+            // 往后跳过了结尾，当作这一条已经听完。
+            self.mark_finished();
             self.play_next(false);
             return;
         }

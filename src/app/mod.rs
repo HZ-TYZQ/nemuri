@@ -8,6 +8,7 @@ mod media;
 mod order;
 mod playback;
 mod playlists;
+mod progress;
 mod queue;
 mod selection;
 mod session;
@@ -25,12 +26,14 @@ use crate::config::{AppConfig, AppPaths};
 use crate::library::{LibraryEvent, LibraryWorker};
 use crate::player::{PlayState, PlaybackBackend, Player, PlayerEvent};
 use crate::playlist::PlaylistStore;
+use crate::progress::ProgressStore;
 use crate::session::Session;
 use crate::track::Track;
 
 pub use action::Action;
 pub use catalog::Catalog;
 use playback::Skip;
+use progress::Progress;
 use sleep::SleepTimer;
 pub use state::{Playback, ViewState};
 
@@ -68,6 +71,7 @@ pub struct App {
     playback: Playback,
     view: ViewState,
     playlists: PlaylistStore,
+    progress: Progress,
     config: AppConfig,
     /// 启动时的设置。退出时与 `config` 比较，只把改过的项写回配置文件。
     config_at_start: AppConfig,
@@ -117,6 +121,8 @@ impl App {
         let playlists = PlaylistStore::load(paths.playlists_dir.clone())
             .map_err(|error| format!("无法打开播放列表目录: {error}"))?;
         let playlist_warning = playlists.warnings().first().cloned();
+        let (progress, progress_warning) = ProgressStore::load(&paths.progress_file);
+        let now = Instant::now();
         let scanner = LibraryWorker::start(library_dir.clone(), paths.cache_db.clone());
         let pending_session =
             Session::load(&paths.session_file).filter(|session| session.library_dir == library_dir);
@@ -128,10 +134,11 @@ impl App {
             catalog: Catalog::new(),
             playback: Playback::new(player, seed),
             view: ViewState {
-                message: initial_warning.or(playlist_warning),
+                message: initial_warning.or(playlist_warning).or(progress_warning),
                 ..ViewState::default()
             },
             playlists,
+            progress: Progress::new(progress, now),
             config_at_start: config.clone(),
             config,
             library_dir,
@@ -141,7 +148,7 @@ impl App {
             should_quit: false,
             save_config_on_exit,
             pending_session,
-            now: Instant::now(),
+            now,
         })
     }
 
@@ -222,10 +229,11 @@ impl App {
         }
     }
 
-    /// 随时间推进的状态：睡眠定时。与扫描、搜索分开，测试可以只推进时间。
+    /// 随时间推进的状态：睡眠定时和收听进度。与扫描、搜索分开，测试可以只推进时间。
     pub(super) fn tick_timers(&mut self, now: Instant) {
         self.now = now;
         self.tick_sleep();
+        self.tick_progress();
     }
 
     fn drain_library_events(&mut self) {
@@ -251,10 +259,14 @@ impl App {
     pub(super) fn drain_player_events(&mut self) {
         for event in self.playback.player.drain_events() {
             match event {
-                PlayerEvent::EndOfStream if self.playback.sleep == SleepTimer::EndOfTrack => {
-                    self.sleep_at_track_end();
+                PlayerEvent::EndOfStream => {
+                    self.mark_finished();
+                    if self.playback.sleep == SleepTimer::EndOfTrack {
+                        self.sleep_at_track_end();
+                    } else {
+                        self.play_next(true);
+                    }
                 }
-                PlayerEvent::EndOfStream => self.play_next(true),
                 PlayerEvent::OutputError(error) => {
                     self.playback.spectrum.reset_output();
                     self.view.message =
