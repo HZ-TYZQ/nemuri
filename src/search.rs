@@ -24,12 +24,13 @@ impl SearchIndex {
         }
     }
 
-    pub fn replace_tracks(&mut self, tracks: &[Track]) {
+    /// 换上新的曲目，只索引 `scope` 里的下标（按给定顺序）。
+    pub fn replace_tracks(&mut self, tracks: &[Track], scope: &[usize]) {
         self.matcher.restart(true);
         self.results.clear();
         let injector = self.matcher.injector();
-        for (index, track) in tracks.iter().enumerate() {
-            let columns = track.searchable_columns();
+        for &index in scope {
+            let columns = tracks[index].searchable_columns();
             let searchable = columns.join("  ");
             injector.push(index, move |_, matcher_columns| {
                 matcher_columns[0] = Utf32String::from(searchable);
@@ -38,7 +39,7 @@ impl SearchIndex {
         drop(injector);
         self.reparse(false);
         if self.query.is_empty() {
-            self.results = (0..tracks.len()).collect();
+            self.results = scope.to_vec();
         }
     }
 
@@ -130,7 +131,7 @@ mod tests {
             track("Hello", "Adele", "25", "adele/hello.flac"),
         ];
         let mut search = SearchIndex::new();
-        search.replace_tracks(&tracks);
+        search.replace_tracks(&tracks, &all(&tracks));
         assert_search(&mut search, "ADELE", &[1]);
         assert_search(&mut search, "萧邦", &[0]);
         assert_search(&mut search, "jay/01", &[0]);
@@ -149,7 +150,7 @@ mod tests {
             track("Hello", "Adele", "25", "adele/hello.flac"),
         ];
         let mut search = SearchIndex::new();
-        search.replace_tracks(&tracks);
+        search.replace_tracks(&tracks, &all(&tracks));
         assert_search(&mut search, "studio_video", &[0]);
         assert_search(&mut search, "涩涩", &[0]);
     }
@@ -161,7 +162,7 @@ mod tests {
             track("夜曲", "周杰伦", "十一月的萧邦", "jay/01.flac"),
         ];
         let mut search = SearchIndex::new();
-        search.replace_tracks(&tracks);
+        search.replace_tracks(&tracks, &all(&tracks));
         assert_search(&mut search, "ADELE", &[0]);
 
         let replacement = vec![track(
@@ -170,9 +171,28 @@ mod tests {
             "Bach",
             "gould/goldberg.flac",
         )];
-        search.replace_tracks(&replacement);
+        search.replace_tracks(&replacement, &all(&replacement));
         assert!(search.results().is_empty());
         assert_search(&mut search, "BACH", &[0]);
+    }
+
+    fn all(tracks: &[Track]) -> Vec<usize> {
+        (0..tracks.len()).collect()
+    }
+
+    #[test]
+    fn only_tracks_in_scope_are_listed_and_searched() {
+        let tracks = vec![
+            track("Hello", "Adele", "25", "adele/hello.flac"),
+            track("夜曲", "周杰伦", "十一月的萧邦", "jay/01.flac"),
+            track("Someone Like You", "Adele", "21", "adele/someone.flac"),
+        ];
+        let mut search = SearchIndex::new();
+        search.replace_tracks(&tracks, &[0, 2]);
+        assert_eq!(search.results(), [0, 2]);
+        assert_search(&mut search, "someone", &[2]);
+        // 范围外的曲目即使匹配也不出现。
+        assert_search(&mut search, "萧邦", &[]);
     }
 
     fn assert_search(search: &mut SearchIndex, query: &str, expected: &[usize]) {

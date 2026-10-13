@@ -150,6 +150,7 @@ impl App {
             }
             Action::Enqueue => self.enqueue_selected(false),
             Action::EnqueueNext => self.enqueue_selected(true),
+            Action::OpenOverlay(Overlay::Folders) => self.open_folders(),
             Action::OpenOverlay(overlay) => self.view.overlay = overlay,
             Action::CursorDown => self.move_cursor(1),
             Action::CursorUp => self.move_cursor(-1),
@@ -204,6 +205,11 @@ impl App {
             Overlay::Queue => {
                 self.view.queue_selected = step(self.view.queue_selected, self.playback.queue.len())
             }
+            // 第 0 行是“全部”，所以比文件夹数多一行。
+            Overlay::Folders => {
+                self.view.folder_selected =
+                    step(self.view.folder_selected, self.catalog.folders().len() + 1);
+            }
             Overlay::Help | Overlay::NameInput | Overlay::DeleteConfirm => {}
         }
     }
@@ -217,6 +223,7 @@ impl App {
             Overlay::Playlists => self.view.playlist_selected = row,
             Overlay::PlaylistTracks => self.view.playlist_track_selected = row,
             Overlay::Queue => self.view.queue_selected = row,
+            Overlay::Folders => self.view.folder_selected = row,
             Overlay::Help | Overlay::NameInput | Overlay::DeleteConfirm => {}
         }
     }
@@ -237,6 +244,7 @@ impl App {
             }
             Overlay::PlaylistTracks => self.play_playlist_from_selected(),
             Overlay::Queue => self.play_queue_selected(),
+            Overlay::Folders => self.apply_selected_folder(),
             Overlay::NameInput => self.create_playlist(),
             Overlay::Help | Overlay::DeleteConfirm => {}
         }
@@ -246,7 +254,7 @@ impl App {
         match self.view.overlay {
             Overlay::None if self.view.search_active => self.cancel_search(),
             Overlay::None => self.view.message = None,
-            Overlay::Help | Overlay::Playlists | Overlay::Queue => {
+            Overlay::Help | Overlay::Playlists | Overlay::Queue | Overlay::Folders => {
                 self.view.overlay = Overlay::None
             }
             Overlay::PlaylistTracks | Overlay::NameInput | Overlay::DeleteConfirm => {

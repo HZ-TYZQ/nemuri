@@ -1,4 +1,4 @@
-//! 帮助、播放列表、播放队列和确认弹层。
+//! 帮助、播放列表、播放队列、文件夹和确认弹层。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -12,14 +12,16 @@ use crate::theme::Theme;
 use crate::track::Track;
 
 use super::ListView;
-use super::keymap::{self, DELETE_CONFIRM, HELP, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS, QUEUE};
+use super::keymap::{
+    self, DELETE_CONFIRM, FOLDERS, HELP, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS, QUEUE,
+};
 use super::text::{fmt_duration, now_playing_text, truncate_display};
 
 pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
     // 非列表型弹层没有可点击的行；先失效，命中测试才不会用上一帧的坐标。
     if !matches!(
         app.view().overlay,
-        Overlay::Playlists | Overlay::PlaylistTracks | Overlay::Queue
+        Overlay::Playlists | Overlay::PlaylistTracks | Overlay::Queue | Overlay::Folders
     ) {
         view.clear();
     }
@@ -39,6 +41,7 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, view: &m
         Overlay::Playlists => draw_playlists(frame, app, theme, view),
         Overlay::Queue => draw_queue(frame, app, theme, view),
         Overlay::PlaylistTracks => draw_playlist_tracks(frame, app, theme, view),
+        Overlay::Folders => draw_folders(frame, app, theme, view),
         Overlay::NameInput => draw_text_popup(
             frame,
             " 新建播放列表 ",
@@ -281,6 +284,69 @@ fn draw_queue(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
     let help = help_row(inner);
     frame.render_widget(
         Paragraph::new(keymap::hints(QUEUE)).style(Style::new().fg(theme.muted)),
+        help,
+    );
+}
+
+/// 第 0 行是“全部”，之后每个文件夹一行：名称左对齐、曲目数右对齐，
+/// 当前筛选用 ● 标出。
+fn draw_folders(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
+    let folders = app.catalog().folders();
+    let rows = folders.len() + 1;
+    // 列表行、上下边框和提示行。
+    let area = centered(frame.area(), 60, (rows as u16).saturating_add(3));
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(Span::styled(
+            " 文件夹 ",
+            Style::new().fg(theme.primary).bold(),
+        ))
+        .border_style(Style::new().fg(theme.border));
+
+    let active = app.catalog().folder();
+    let entries = std::iter::once(("全部", app.catalog().len(), active.is_none())).chain(
+        folders
+            .iter()
+            .map(|(folder, count)| (folder.label(), *count, active == Some(folder))),
+    );
+    // 去掉左右边框和 highlight_symbol；标记占两列，名称和数目之间至少留一列。
+    let text_width = usize::from(area.width).saturating_sub(2 + 2 + 2);
+    let items = entries.map(|(name, count, current)| {
+        let count = format!("{count} 首");
+        let name_width = text_width
+            .saturating_sub(UnicodeWidthStr::width(count.as_str()) + 1)
+            .max(1);
+        let name = truncate_display(name, name_width);
+        let padding = " ".repeat(
+            text_width
+                .saturating_sub(UnicodeWidthStr::width(name.as_str()))
+                .saturating_sub(UnicodeWidthStr::width(count.as_str()))
+                .max(1),
+        );
+        let marker = if current { "● " } else { "  " };
+        ListItem::new(Line::from(vec![
+            Span::styled(marker, Style::new().fg(theme.primary)),
+            Span::styled(name, Style::new().fg(theme.primary)),
+            Span::styled(padding, Style::new().fg(theme.muted)),
+            Span::styled(count, Style::new().fg(theme.muted)),
+        ]))
+    });
+
+    let (inner, viewport) = list_viewport(area, &block);
+    frame.render_widget(block, area);
+    let list = List::new(items)
+        .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
+        .highlight_style(Style::new().bg(theme.selection_bg).bold());
+    frame.render_stateful_widget(
+        list,
+        viewport,
+        view.state_for(Some(app.view().folder_selected)),
+    );
+    view.record(viewport, rows);
+    let help = help_row(inner);
+    frame.render_widget(
+        Paragraph::new(keymap::hints(FOLDERS)).style(Style::new().fg(theme.muted)),
         help,
     );
 }

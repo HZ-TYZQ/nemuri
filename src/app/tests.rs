@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::config::{AppConfig, AppPaths};
 use crate::player::fake::{FakeBackend, FakeControl};
 use crate::player::{PlayState, PlaybackBackend, Player};
-use crate::track::{RepeatMode, SortKey, Track};
+use crate::track::{Folder, RepeatMode, SortKey, Track};
 
 use crate::ui::{MouseInput, ViewLayout};
 
@@ -1786,4 +1786,197 @@ fn the_rodio_backend_plays_and_pauses_through_app() {
 
     app.dispatch(Action::TogglePause);
     assert_eq!(app.player().state(), PlayState::Paused);
+}
+
+/// 两个文件夹加一首放在根目录的歌：a 和 b 各两首。文件都写出来，播放也能用。
+fn folder_fixture(app: &mut App, music: &Path) -> Vec<PathBuf> {
+    let tracks: Vec<Track> = ["a/1.wav", "a/2.wav", "b/3.wav", "b/4.wav", "5.wav"]
+        .into_iter()
+        .map(|relative| nested_track(music, relative))
+        .collect();
+    for item in &tracks {
+        std::fs::create_dir_all(item.path.parent().unwrap()).unwrap();
+        write_test_wav(&item.path);
+    }
+    let paths = tracks.iter().map(|item| item.path.clone()).collect();
+    app.catalog.set_tracks(tracks);
+    paths
+}
+
+fn named(name: &str) -> Folder {
+    Folder::Named(name.to_owned())
+}
+
+fn key(code: KeyCode) -> KeyEvent {
+    KeyEvent::new(code, KeyModifiers::NONE)
+}
+
+/// 经文件夹面板选中第 `row` 行（第 0 行是“全部”）。
+fn choose_folder(app: &mut App, row: usize) {
+    press(app, key(KeyCode::Char('f')));
+    assert_eq!(app.view.overlay, Overlay::Folders);
+    app.dispatch(Action::SelectRow(row));
+    press(app, key(KeyCode::Enter));
+    settle_search_and_selection(app);
+}
+
+#[test]
+fn the_folder_panel_lists_every_folder_with_its_count() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+
+    press(&mut app, key(KeyCode::Char('f')));
+
+    assert_eq!(app.view.overlay, Overlay::Folders);
+    assert_eq!(app.view.folder_selected, 0);
+    // 根目录排在最后。
+    assert_eq!(
+        app.catalog.folders(),
+        [(named("a"), 2), (named("b"), 2), (Folder::Root, 1)]
+    );
+    let (_, backend) = render(&app, 80, 24);
+    let rows = screen_rows(&backend);
+    for expected in [
+        "●全部5首",
+        "a2首",
+        "b2首",
+        "(根目录)1首",
+        "Enter只看此文件夹",
+    ] {
+        assert!(
+            rows.iter().any(|row| row.contains(expected)),
+            "缺少 {expected}"
+        );
+    }
+}
+
+#[test]
+fn choosing_a_folder_filters_the_library_and_search_stays_inside_it() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+
+    choose_folder(&mut app, 1);
+
+    assert_eq!(app.view.overlay, Overlay::None);
+    assert_eq!(app.catalog.folder(), Some(&named("a")));
+    assert_eq!(app.visible_indices(), [0, 1]);
+    assert_eq!(app.view.message.as_deref(), Some("文件夹：a（2 首）"));
+
+    // 整个曲库里搜“3”能找到 b/3，筛选后找不到。
+    press(&mut app, key(KeyCode::Char('/')));
+    press(&mut app, key(KeyCode::Char('3')));
+    settle_search_and_selection(&mut app);
+    assert!(app.visible_indices().is_empty());
+    press(&mut app, key(KeyCode::Backspace));
+    press(&mut app, key(KeyCode::Char('2')));
+    settle_search_and_selection(&mut app);
+    assert_eq!(app.visible_indices(), [1]);
+
+    press(&mut app, key(KeyCode::Esc));
+    settle_search_and_selection(&mut app);
+    assert_eq!(app.visible_indices(), [0, 1]);
+}
+
+#[test]
+fn choosing_all_clears_the_filter() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+    choose_folder(&mut app, 2);
+    assert_eq!(app.visible_indices(), [2, 3]);
+
+    // 再次打开时光标停在当前的筛选上。
+    press(&mut app, key(KeyCode::Char('f')));
+    assert_eq!(app.view.folder_selected, 2);
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.view.overlay, Overlay::None);
+    assert_eq!(app.catalog.folder(), Some(&named("b")));
+
+    choose_folder(&mut app, 0);
+    assert_eq!(app.catalog.folder(), None);
+    assert_eq!(app.visible_indices(), [0, 1, 2, 3, 4]);
+    assert_eq!(app.view.message.as_deref(), Some("显示全部 5 首"));
+}
+
+#[test]
+fn the_cursor_follows_the_selected_or_playing_track_into_the_folder() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+    app.view.selected = 1;
+
+    // 选中的 a/2 在 a 里，光标留在它上面。
+    choose_folder(&mut app, 1);
+    assert_eq!(app.selected_track_index(), Some(1));
+
+    // 选中的 a/2 不在 b 里，改落到正在播放的 b/4。
+    app.play_index(3, false, BagUpdate::Reanchor).unwrap();
+    choose_folder(&mut app, 2);
+    assert_eq!(app.selected_track_index(), Some(3));
+
+    // 两者都不在根目录里，回到第一行。
+    choose_folder(&mut app, 3);
+    assert_eq!(app.view.selected, 0);
+    assert_eq!(app.selected_track_index(), Some(4));
+}
+
+#[test]
+fn a_rescan_keeps_the_folder_filter_until_the_folder_is_gone() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+    choose_folder(&mut app, 2);
+
+    let tracks = app.catalog.tracks().to_vec();
+    app.apply_scan_finished(tracks.clone(), Vec::new());
+    settle_search_and_selection(&mut app);
+    assert_eq!(app.catalog.folder(), Some(&named("b")));
+    // 重扫按路径重排，根目录的 5.wav 排到了最前面。
+    let shown: Vec<&str> = app
+        .visible_indices()
+        .iter()
+        .map(|index| app.catalog.tracks()[*index].display_title())
+        .collect();
+    assert_eq!(shown, ["3", "4"]);
+
+    let without_b = tracks
+        .into_iter()
+        .filter(|track| Folder::of(track) != named("b"))
+        .collect();
+    app.apply_scan_finished(without_b, Vec::new());
+    settle_search_and_selection(&mut app);
+    assert_eq!(app.catalog.folder(), None);
+    assert_eq!(app.visible_indices(), [0, 1, 2]);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("扫描完成，共 3 首歌曲；文件夹“b”已不存在，改为显示全部")
+    );
+}
+
+#[test]
+fn double_clicking_a_folder_row_applies_it() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+    press(&mut app, key(KeyCode::Char('f')));
+
+    let (view, backend) = render(&app, 80, 24);
+    let row = screen_rows(&backend)
+        .iter()
+        .position(|row| row.contains("b2首"))
+        .unwrap() as u16;
+    let mut input = MouseInput::default();
+    mouse(&mut app, &mut input, click(40, row), &view);
+    assert_eq!(app.view.folder_selected, 2);
+    mouse(&mut app, &mut input, click(40, row), &view);
+
+    assert_eq!(app.view.overlay, Overlay::None);
+    assert_eq!(app.catalog.folder(), Some(&named("b")));
+}
+
+#[test]
+fn the_library_title_names_the_folder_and_counts_it_against_the_whole_library() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    folder_fixture(&mut app, &temp.path().join("music"));
+    choose_folder(&mut app, 1);
+
+    let (_, backend) = render(&app, 100, 24);
+    let rows = screen_rows(&backend);
+    assert!(rows[0].contains("文件夹a·2/5首"), "{}", rows[0]);
 }

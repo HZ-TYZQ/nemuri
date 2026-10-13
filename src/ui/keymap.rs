@@ -196,6 +196,12 @@ pub(super) const LIBRARY: &[Binding] = &[
         "/ 搜索",
         &[(ch('/'), Action::StartSearch)],
     ),
+    hinted(
+        "f",
+        "按文件夹筛选曲库",
+        "f 文件夹",
+        &[(ch('f'), Action::OpenOverlay(Overlay::Folders))],
+    ),
     listed("r", "后台重新扫描", &[(ch('r'), Action::Rescan)]),
     listed(
         "a / A",
@@ -290,6 +296,20 @@ pub(super) const QUEUE: &[Binding] = &[
     ),
 ];
 
+pub(super) const FOLDERS: &[Binding] = &[
+    hidden(CURSOR),
+    listed(
+        "Enter",
+        "只看此文件夹",
+        &[(code(KeyCode::Enter), Action::Activate)],
+    ),
+    listed(
+        "Esc",
+        "关闭",
+        &[(code(KeyCode::Esc), Action::Back), (ch('f'), Action::Back)],
+    ),
+];
+
 /// 输入框里没有绑定的字符都当作输入。
 pub(super) const NAME_INPUT: &[Binding] = &[
     listed("Enter", "创建", &[(code(KeyCode::Enter), Action::Activate)]),
@@ -327,6 +347,7 @@ fn bindings_for(app: &App) -> (&'static [Binding], bool) {
         Overlay::Playlists => (PLAYLISTS, false),
         Overlay::PlaylistTracks => (PLAYLIST_TRACKS, false),
         Overlay::Queue => (QUEUE, false),
+        Overlay::Folders => (FOLDERS, false),
         Overlay::NameInput => (NAME_INPUT, true),
         Overlay::DeleteConfirm => (DELETE_CONFIRM, false),
     }

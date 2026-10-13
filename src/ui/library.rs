@@ -33,8 +33,19 @@ pub(super) fn draw_library(
 ) {
     let scan = if let Some((scanned, found)) = app.scan_progress() {
         format!(" · 扫描中 {scanned}/{found} ")
+    } else if app.catalog().folder().is_some() {
+        format!(
+            " · {}/{} 首 ",
+            app.visible_indices().len(),
+            app.catalog().len()
+        )
     } else {
         format!(" · {} 首 ", app.visible_indices().len())
+    };
+    // 筛选时用文件夹名代替音乐库路径：路径常常很长，会先被标题栏截掉。
+    let place = match app.catalog().folder() {
+        Some(folder) => format!("· 文件夹 {}", folder.label()),
+        None => format!("· {}", app.library_dir().display()),
     };
     let title = Line::from(vec![
         Span::styled(" ♪ Music Player ", Style::new().fg(theme.primary).bold()),
@@ -43,10 +54,7 @@ pub(super) fn draw_library(
             format!("· {} ", app.config().sort.label()),
             Style::new().fg(theme.muted),
         ),
-        Span::styled(
-            format!("· {}", app.library_dir().display()),
-            Style::new().fg(theme.muted),
-        ),
+        Span::styled(place, Style::new().fg(theme.muted)),
         Span::styled(scan, Style::new().fg(theme.muted)),
     ]);
     let block = Block::bordered()

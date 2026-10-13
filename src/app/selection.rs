@@ -64,5 +64,6 @@ impl App {
             .view
             .queue_selected
             .min(self.playback.queue.len().saturating_sub(1));
+        self.view.folder_selected = self.view.folder_selected.min(self.catalog.folders().len());
     }
 }

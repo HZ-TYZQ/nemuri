@@ -56,6 +56,8 @@ pub struct ViewState {
     pub(crate) playlist_selected: usize,
     pub(crate) playlist_track_selected: usize,
     pub(crate) queue_selected: usize,
+    /// 文件夹面板的光标：第 0 行是“全部”，之后依次是各个文件夹。
+    pub(crate) folder_selected: usize,
     /// 新建播放列表时输入的名称。
     pub(crate) name_input: String,
     /// 底栏显示的一行提示。

@@ -2,6 +2,7 @@
 
 mod action;
 mod catalog;
+mod folders;
 mod lyrics;
 mod media;
 mod order;
@@ -39,6 +40,7 @@ pub enum Overlay {
     Playlists,
     PlaylistTracks,
     Queue,
+    Folders,
     NameInput,
     DeleteConfirm,
 }
@@ -320,6 +322,7 @@ impl App {
 
     /// 应用一次完整扫描结果，并按路径尽量保留正在播放与选中的歌曲位置。
     fn apply_scan_finished(&mut self, tracks: Vec<Track>, warnings: Vec<String>) {
+        let filtered = self.catalog.folder().cloned();
         self.replace_tracks(tracks);
         // 重扫往往是因为刚放进了 .lrc 文件，下一个 tick 重新读取歌词。
         self.playback.lyrics = None;
@@ -334,6 +337,16 @@ impl App {
             ))
         };
         self.restore_session();
+        // 放在恢复会话之后，这条说明才不会被恢复提示覆盖。
+        if let Some(folder) = filtered
+            && self.catalog.folder().is_none()
+        {
+            let note = format!("文件夹“{}”已不存在，改为显示全部", folder.label());
+            self.view.message = Some(match self.view.message.take() {
+                Some(message) => format!("{message}；{note}"),
+                None => note,
+            });
+        }
     }
 
     pub fn save_settings(&mut self) -> Result<(), String> {

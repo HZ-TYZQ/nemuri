@@ -11,7 +11,8 @@ use crate::track::Track;
 
 use super::ListView;
 use super::keymap::{
-    self, DELETE_CONFIRM, HELP, Key, LIBRARY, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS, QUEUE, SEARCH,
+    self, DELETE_CONFIRM, FOLDERS, HELP, Key, LIBRARY, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS,
+    QUEUE, SEARCH,
 };
 use super::library::{
     INACTIVE_ICON, LIST_ICON_WIDTH, PAUSE_ACTION_ICON, PLAY_ACTION_ICON, STOPPED_ICON,
@@ -308,6 +309,7 @@ fn every_binding_is_reachable_in_its_table() {
         ("playlists", PLAYLISTS, false),
         ("playlist tracks", PLAYLIST_TRACKS, false),
         ("queue", QUEUE, false),
+        ("folders", FOLDERS, false),
         ("name input", NAME_INPUT, true),
         ("delete confirm", DELETE_CONFIRM, false),
     ];
@@ -342,6 +344,7 @@ fn generated_hints_keep_the_overlay_wording() {
         keymap::hints(QUEUE),
         "Enter 跳到此处播放 · d 移除 · J/K 上下移动 · c 清空 · Esc 关闭"
     );
+    assert_eq!(keymap::hints(FOLDERS), "Enter 只看此文件夹 · Esc 关闭");
     assert_eq!(keymap::hints(NAME_INPUT), "Enter 创建 · Esc 取消");
     assert_eq!(keymap::hints(DELETE_CONFIRM), "y 确认 · n/Esc 取消");
     assert_eq!(keymap::hints(HELP), "? / Esc 关闭");
@@ -352,7 +355,7 @@ fn generated_hints_keep_the_overlay_wording() {
 #[test]
 fn help_lines_align_their_descriptions() {
     let lines = keymap::help_lines();
-    assert_eq!(lines.len(), 20, "帮助弹层按 20 行设计高度");
+    assert_eq!(lines.len(), 21, "帮助弹层按 21 行设计高度");
     for (line, binding) in lines
         .iter()
         .zip(LIBRARY.iter().filter(|b| !b.keys.is_empty()))
