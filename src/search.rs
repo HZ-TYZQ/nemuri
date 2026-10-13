@@ -137,6 +137,24 @@ mod tests {
     }
 
     #[test]
+    fn tag_titles_stay_searchable_beside_the_file_name() {
+        // 界面只显示文件名，标签标题不再出现在界面上，但仍应能搜到。
+        let tracks = vec![
+            track(
+                "studio_video_1761120035627.mp4",
+                "某人",
+                "",
+                "ASMR(Other)/音频 - 涩涩ASMR.mp3",
+            ),
+            track("Hello", "Adele", "25", "adele/hello.flac"),
+        ];
+        let mut search = SearchIndex::new();
+        search.replace_tracks(&tracks);
+        assert_search(&mut search, "studio_video", &[0]);
+        assert_search(&mut search, "涩涩", &[0]);
+    }
+
+    #[test]
     fn replacing_tracks_clears_stale_results_while_query_is_active() {
         let tracks = vec![
             track("Hello", "Adele", "25", "adele/hello.flac"),

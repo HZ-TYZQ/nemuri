@@ -118,9 +118,9 @@ fn truncate_display_limits_by_terminal_width() {
 #[test]
 fn track_rows_fill_the_width_and_right_align_the_duration() {
     let track = Track {
-        path: PathBuf::from("/music/长标题.flac"),
-        relative_path: PathBuf::from("长标题.flac"),
-        title: "这是一首名字特别特别长的歌曲标题".to_owned(),
+        path: PathBuf::from("/music/这是一首名字特别特别长的歌曲标题.flac"),
+        relative_path: PathBuf::from("这是一首名字特别特别长的歌曲标题.flac"),
+        title: "标签里的标题".to_owned(),
         artist: Some("一个名字同样很长的歌手".to_owned()),
         album: Some("一张名字也非常非常长的专辑".to_owned()),
         duration: Some(Duration::from_secs(3_661)),

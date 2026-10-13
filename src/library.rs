@@ -578,6 +578,35 @@ mod tests {
         assert!(track.duration.is_some());
     }
 
+    #[test]
+    fn a_renamed_file_shows_its_new_name_after_the_next_scan() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("music");
+        fs::create_dir_all(root.join("ASMR(某人)")).unwrap();
+        let old = root.join("ASMR(某人)/音频 - 旧名字.wav");
+        write_silent_wav(&old, 1);
+        let (mut connection, _) = open_database(&temp.path().join("library.sqlite3")).unwrap();
+        let (events, _receiver) = mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        let names = |tracks: &[Track]| {
+            tracks
+                .iter()
+                .map(|track| track.display_title().to_owned())
+                .collect::<Vec<_>>()
+        };
+
+        let (tracks, _) = scan_library(&root, &mut connection, &events, &cancel).unwrap();
+        assert_eq!(names(&tracks), ["音频 - 旧名字"]);
+
+        // 改名不改变文件大小和修改时间，旧路径的索引行必须被清掉，而不是沿用旧名字。
+        fs::rename(&old, root.join("ASMR(某人)/音频 - 新名字（已裁剪）.wav")).unwrap();
+        let (tracks, _) = scan_library(&root, &mut connection, &events, &cancel).unwrap();
+        assert_eq!(names(&tracks), ["音频 - 新名字（已裁剪）"]);
+        let cached = load_cached(&connection, &root.to_string_lossy()).unwrap();
+        assert_eq!(cached.len(), 1);
+        assert!(!cached.contains_key(&*old.to_string_lossy()));
+    }
+
     fn write_silent_wav(path: &Path, sample_rate: u32) {
         let data = [0u8; 2];
         let mut wav = Vec::new();

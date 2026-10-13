@@ -22,20 +22,27 @@ pub struct Track {
 }
 
 impl Track {
+    /// 界面上显示的名称：磁盘上的文件名（不含扩展名），原样显示。
+    ///
+    /// 不用标签标题：下载来的录音常带无意义的标题，用户写在文件名里的备注
+    /// 也不会出现在标签中。文件名由用户自己维护，改名后下次扫描即生效。
     pub fn display_title(&self) -> &str {
-        if self.title.trim().is_empty() {
-            self.relative_path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("未知曲目")
-        } else {
-            &self.title
+        let stem = self
+            .relative_path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .filter(|stem| !stem.trim().is_empty());
+        match stem {
+            Some(stem) => stem,
+            None if !self.title.trim().is_empty() => &self.title,
+            None => "未知曲目",
         }
     }
 
+    /// 文件名已经包含在相对路径里，因此第一列放标签标题，让它照样能被搜到。
     pub fn searchable_columns(&self) -> [String; 4] {
         [
-            self.display_title().to_owned(),
+            self.title.clone(),
             self.artist.clone().unwrap_or_default(),
             self.album.clone().unwrap_or_default(),
             self.relative_path.to_string_lossy().into_owned(),
@@ -43,7 +50,6 @@ impl Track {
     }
 }
 
-/// 曲库列表的排序字段。播放顺序跟随列表顺序，因此它同时决定顺序播放的走向。
 /// 曲目时长的显示形式：`m:ss`，超过一小时为 `h:mm:ss`。
 pub fn fmt_duration(duration: Duration) -> String {
     let seconds = duration.as_secs();
@@ -55,6 +61,7 @@ pub fn fmt_duration(duration: Duration) -> String {
     }
 }
 
+/// 曲库列表的排序字段。播放顺序跟随列表顺序，因此它同时决定顺序播放的走向。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortKey {
@@ -281,11 +288,38 @@ mod tests {
     }
 
     #[test]
+    fn display_title_is_the_file_stem_not_the_tag_title() {
+        // 标签标题是下载工具留下的无意义名字，文件名才是用户看得懂的名称。
+        let tagged = track(
+            "studio_video_1761120035627.mp4",
+            None,
+            None,
+            "ASMR(Other)/音频 - 涩涩ASMR.mp3",
+        );
+        assert_eq!(tagged.display_title(), "音频 - 涩涩ASMR");
+        // 只去掉最后一个扩展名，文件名里的点原样保留。
+        let dotted = track("x", None, None, "A/音频 - 甘やかし_ 9.10.m4a");
+        assert_eq!(dotted.display_title(), "音频 - 甘やかし_ 9.10");
+        let no_extension = track("x", None, None, "A/B/录音");
+        assert_eq!(no_extension.display_title(), "录音");
+    }
+
+    #[test]
+    fn display_title_falls_back_when_the_file_name_is_blank() {
+        let mut blank = track("标签标题", None, None, "A/ .flac");
+        assert_eq!(blank.display_title(), "标签标题");
+        blank.title = " ".to_owned();
+        assert_eq!(blank.display_title(), "未知曲目");
+    }
+
+    #[test]
     fn title_sort_is_case_insensitive_and_reverses_cleanly() {
+        // 名称放在不同目录下，路径顺序（1、2、3）和名称顺序不同，
+        // 排序结果只能来自名称；区分大小写时 "Banana" 会排到 "apple" 前面。
         let tracks = vec![
-            track("banana", None, None, "b.flac"),
-            track("Apple", None, None, "a.flac"),
-            track("cherry", None, None, "c.flac"),
+            track("x", None, None, "1/cherry.flac"),
+            track("x", None, None, "2/Banana.flac"),
+            track("x", None, None, "3/apple.flac"),
         ];
         let ascending = SortOrder {
             key: SortKey::Title,
@@ -293,7 +327,7 @@ mod tests {
         };
         assert_eq!(
             sorted(tracks.clone(), ascending),
-            ["a.flac", "b.flac", "c.flac"]
+            ["3/apple.flac", "2/Banana.flac", "1/cherry.flac"]
         );
         assert_eq!(
             sorted(
@@ -303,7 +337,7 @@ mod tests {
                     ..ascending
                 }
             ),
-            ["c.flac", "b.flac", "a.flac"]
+            ["1/cherry.flac", "2/Banana.flac", "3/apple.flac"]
         );
     }
 

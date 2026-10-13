@@ -579,18 +579,21 @@ fn queue_keys_do_not_leak_to_the_library_while_the_panel_is_open() {
 #[test]
 fn queue_panel_right_aligns_durations_and_keeps_every_entry_visible() {
     let (_temp, mut app) = test_app(AppConfig::default());
+    // 覆盖三种排版分支：缺歌手、标题短到留白多、路径已不在曲库中。
     let mut tracks: Vec<Track> = (0..12)
         .map(|index| {
-            let mut item = track(PathBuf::from(format!("/music/{index:02}.wav")));
-            item.title = format!("第{index}首很长很长很长很长很长很长的中文歌名 Extra Long Tail");
+            let name = if index == 4 {
+                "Short".to_owned()
+            } else {
+                format!("第{index}首很长很长很长很长很长很长的中文歌名 Extra Long Tail")
+            };
+            let mut item = track(PathBuf::from(format!("/music/{name}.wav")));
             item.artist = Some("某位歌手名字也不短".to_owned());
             item.duration = Some(Duration::from_secs(61 * (index as u64 + 1)));
             item
         })
         .collect();
-    // 覆盖三种排版分支：缺歌手、标题短到留白多、路径已不在曲库中。
     tracks[3].artist = None;
-    tracks[4].title = "Short".to_owned();
     app.catalog.set_tracks(tracks);
     let missing = PathBuf::from("/gone/不在库里的一首歌.flac");
     app.playback.queue = app
@@ -656,15 +659,13 @@ fn skipping_a_broken_track_leaves_a_notice_after_the_next_track_starts() {
     let (temp, mut app) = test_app(AppConfig::default());
     let music = temp.path().join("music");
     let first = music.join("a.wav");
-    let broken = music.join("b.wav");
+    let broken = music.join("坏文件.wav");
     let good = music.join("c.wav");
     write_test_wav(&first);
     std::fs::write(&broken, b"not audio").unwrap();
     write_test_wav(&good);
-    let mut broken_track = track(broken);
-    broken_track.title = "坏文件".to_owned();
     app.catalog
-        .set_tracks(vec![track(first), broken_track, track(good)]);
+        .set_tracks(vec![track(first), track(broken), track(good)]);
     app.playback.playing_index = Some(0);
 
     app.play_next(false);
@@ -726,11 +727,9 @@ fn a_queue_entry_missing_from_the_library_is_named_in_the_notice() {
 #[test]
 fn playing_a_track_directly_reports_the_failure_instead_of_a_skip() {
     let (temp, mut app) = test_app(AppConfig::default());
-    let broken = temp.path().join("music").join("broken.wav");
+    let broken = temp.path().join("music").join("坏文件.wav");
     std::fs::write(&broken, b"not audio").unwrap();
-    let mut broken_track = track(broken);
-    broken_track.title = "坏文件".to_owned();
-    app.catalog.set_tracks(vec![broken_track]);
+    app.catalog.set_tracks(vec![track(broken)]);
 
     app.play_selected();
 
@@ -798,27 +797,31 @@ fn a_rescan_keeps_the_playing_track_when_the_library_path_is_not_canonical() {
     assert_eq!(app.playback.playing_index, Some(0));
 }
 
-fn titled_track(path: PathBuf, title: &str) -> Track {
-    let mut item = track(path);
-    item.title = title.to_owned();
+/// 放在子目录里的曲目。界面名称取自文件名，标签标题设成同一个名字，
+/// 断言可以直接比较 `title`。
+fn nested_track(root: &Path, relative: &str) -> Track {
+    let relative = PathBuf::from(relative);
+    let mut item = track(root.join(&relative));
+    item.title = relative.file_stem().unwrap().to_str().unwrap().to_owned();
+    item.relative_path = relative;
     item
 }
 
-/// 三首歌的路径顺序（a、b、c）和标题顺序（alpha、mid、zeta）刻意相反，
+/// 三首歌的路径顺序（1、2、3）和名称顺序（alpha、mid、zeta）刻意不同，
 /// 这样排序切换一定会移动下标，测试不会因为两种顺序恰好一致而失效。
+/// 界面名称取自文件名，所以名称写在文件名里，再放进不同的目录打乱路径顺序；
+/// 标签标题与文件名相同，断言可以直接比较 `title`。
 fn sort_fixture(app: &mut App, music: &Path) -> Vec<PathBuf> {
-    let paths: Vec<PathBuf> = ["a.wav", "b.wav", "c.wav"]
-        .iter()
-        .map(|name| music.join(name))
+    let tracks: Vec<Track> = ["1/zeta.wav", "2/alpha.wav", "3/mid.wav"]
+        .into_iter()
+        .map(|relative| nested_track(music, relative))
         .collect();
-    for path in &paths {
-        write_test_wav(path);
+    for item in &tracks {
+        std::fs::create_dir_all(item.path.parent().unwrap()).unwrap();
+        write_test_wav(&item.path);
     }
-    app.catalog.set_tracks(vec![
-        titled_track(paths[0].clone(), "zeta"),
-        titled_track(paths[1].clone(), "alpha"),
-        titled_track(paths[2].clone(), "mid"),
-    ]);
+    let paths = tracks.iter().map(|item| item.path.clone()).collect();
+    app.catalog.set_tracks(tracks);
     paths
 }
 
@@ -937,8 +940,8 @@ fn a_rescan_applies_the_configured_sort() {
 
     app.apply_scan_finished(
         vec![
-            titled_track(PathBuf::from("/music/a.wav"), "zeta"),
-            titled_track(PathBuf::from("/music/b.wav"), "alpha"),
+            nested_track(Path::new("/music"), "1/zeta.wav"),
+            nested_track(Path::new("/music"), "2/alpha.wav"),
         ],
         Vec::new(),
     );
@@ -1676,16 +1679,15 @@ fn a_decode_error_mid_track_skips_ahead_and_says_why() {
         ..AppConfig::default()
     });
     let music = temp.path().join("music");
-    let paths: Vec<PathBuf> = ["a.wav", "b.wav"]
+    let paths: Vec<PathBuf> = ["第一首.wav", "b.wav"]
         .iter()
         .map(|name| music.join(name))
         .collect();
     for path in &paths {
         write_test_wav(path);
     }
-    let mut first = track(paths[0].clone());
-    first.title = "第一首".to_owned();
-    app.catalog.set_tracks(vec![first, track(paths[1].clone())]);
+    app.catalog
+        .set_tracks(vec![track(paths[0].clone()), track(paths[1].clone())]);
     app.play_index(0, false, BagUpdate::Reanchor).unwrap();
 
     // 单曲循环也不应重播出错的曲目。
