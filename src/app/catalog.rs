@@ -73,6 +73,12 @@ impl Catalog {
         &self.folders
     }
 
+    /// 顺序播放、循环和随机的范围：筛选的文件夹里的曲库下标，按列表顺序升序排列；
+    /// 没有筛选时是整个曲库。搜索只用来定位曲目，不缩小这个范围。
+    pub fn scope(&self) -> &[usize] {
+        &self.scope
+    }
+
     /// 只看某个文件夹（None 为全部），并在新的范围内重建搜索索引。
     pub(super) fn set_folder(&mut self, folder: Option<Folder>) {
         self.folder = folder;

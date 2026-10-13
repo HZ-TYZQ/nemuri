@@ -52,6 +52,13 @@ impl App {
             .or_else(|| self.current_track().filter(|track| kept(track)))
             .map(|track| track.path.clone());
         self.catalog.set_folder(folder);
+        // 播放范围变了，随机袋要在新范围里重洗。
+        if self.config.shuffle {
+            match self.playback.playing_index {
+                Some(current) => self.reanchor_shuffle_bag(current),
+                None => self.playback.order.clear(),
+            }
+        }
         self.view.selected = 0;
         self.view.pending_selected_path = cursor;
         self.restore_pending_selection();

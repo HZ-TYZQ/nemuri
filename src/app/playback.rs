@@ -149,7 +149,7 @@ impl App {
         }
         let max_attempts = self
             .catalog
-            .tracks()
+            .scope()
             .len()
             .saturating_add(self.playback.queue.len())
             .max(1);
@@ -225,14 +225,14 @@ impl App {
         let mode = self.playback_mode();
         self.playback
             .order
-            .next(self.catalog.tracks().len(), current, natural_end, mode)
+            .next(self.catalog.scope(), current, natural_end, mode)
     }
 
-    /// 随机袋以 `current` 为本轮第一首重新洗牌。
+    /// 随机袋在播放范围内重新洗牌；`current` 在范围里时作为本轮第一首。
     pub(super) fn reanchor_shuffle_bag(&mut self, current: usize) {
         self.playback
             .order
-            .reanchor(self.catalog.tracks().len(), current);
+            .reanchor(self.catalog.scope(), Some(current));
     }
 
     pub(super) fn play_previous(&mut self) {

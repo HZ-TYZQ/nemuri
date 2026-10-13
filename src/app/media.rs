@@ -117,7 +117,7 @@ impl App {
             return true;
         }
         self.playback.order.has_next(
-            self.catalog.tracks().len(),
+            self.catalog.scope(),
             self.playback.playing_index,
             self.playback_mode(),
         )

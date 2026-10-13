@@ -1,7 +1,7 @@
 //! 曲库内的播放顺序：顺序、列表循环、单曲循环和随机袋。
 //!
 //! 这里只和曲库下标打交道，不碰播放器、队列和提示，因此能脱离音频单独测试。
-//! 曲库长度、当前曲目和播放模式都由调用方传入；随机数源在构造时注入。
+//! 播放范围、当前曲目和播放模式都由调用方传入；随机数源在构造时注入。
 
 use crate::track::{PlaybackMode, RepeatMode};
 
@@ -28,36 +28,42 @@ impl PlaybackOrder {
         }
     }
 
-    /// 曲库中 `current` 之后该播哪一首。`natural_end` 表示上一首是自然播完的，
-    /// 只有这时单曲循环才重播同一首；播放出错时单曲循环也照常往后走。
+    /// `current` 之后该播哪一首。`scope` 是可以播的曲库下标，按列表顺序升序排列，
+    /// 文件夹筛选时只含该文件夹，否则是整个曲库。`current` 不在范围内时
+    /// （例如正在播放的曲目不属于筛选的文件夹）从范围开头接着播。
+    /// `natural_end` 表示上一首是自然播完的，只有这时单曲循环才重播同一首；
+    /// 播放出错时单曲循环也照常往后走。
     pub(crate) fn next(
         &mut self,
-        len: usize,
+        scope: &[usize],
         current: Option<usize>,
         natural_end: bool,
         mode: PlaybackMode,
     ) -> Option<usize> {
-        if mode.shuffle {
-            if natural_end && mode.repeat == RepeatMode::One {
-                return current;
-            }
-            return self.next_from_bag(len, current, mode.repeat);
+        if natural_end && mode.repeat == RepeatMode::One {
+            return current;
         }
-        match mode.repeat {
-            RepeatMode::One if natural_end => current,
-            RepeatMode::All | RepeatMode::One if len > 0 => Some((current.unwrap_or(0) + 1) % len),
-            RepeatMode::All | RepeatMode::One => None,
-            RepeatMode::None => match current {
-                Some(index) if index + 1 < len => Some(index + 1),
-                None if len > 0 => Some(0),
-                _ => None,
-            },
+        if mode.shuffle {
+            return self.next_from_bag(scope, current, mode.repeat);
+        }
+        let position = Self::position(scope, current);
+        match (mode.repeat, position) {
+            (_, None) => scope.first().copied(),
+            (RepeatMode::All | RepeatMode::One, Some(position)) => {
+                Some(scope[(position + 1) % scope.len()])
+            }
+            (RepeatMode::None, Some(position)) => scope.get(position + 1).copied(),
         }
     }
 
     /// 不动随机袋地回答还有没有下一首，供系统媒体控制显示。
-    pub(crate) fn has_next(&self, len: usize, current: Option<usize>, mode: PlaybackMode) -> bool {
-        if len == 0 {
+    pub(crate) fn has_next(
+        &self,
+        scope: &[usize],
+        current: Option<usize>,
+        mode: PlaybackMode,
+    ) -> bool {
+        if scope.is_empty() {
             return false;
         }
         if mode.repeat != RepeatMode::None {
@@ -67,23 +73,21 @@ impl PlaybackOrder {
             // 袋子还没建好时，第一次取下一首会以当前曲目为首重新洗一轮。
             return self.bag.is_empty() || self.cursor < self.bag.len();
         }
-        match current {
-            Some(index) => index + 1 < len,
-            None => true,
-        }
+        Self::position(scope, current).is_none_or(|position| position + 1 < scope.len())
     }
 
-    /// 以 `current` 为本轮第一首重新洗牌，其余曲目随机排在后面。
-    pub(crate) fn reanchor(&mut self, len: usize, current: usize) {
-        if len == 0 {
-            self.clear();
-            return;
-        }
-        let current = current.min(len - 1);
-        let mut rest: Vec<usize> = (0..len).filter(|index| *index != current).collect();
+    /// 在 `scope` 内重新洗一轮。`current` 在范围内时作为本轮第一首、视为已播，
+    /// 其余曲目随机排在后面；不在范围内时整个范围都还没播。
+    pub(crate) fn reanchor(&mut self, scope: &[usize], current: Option<usize>) {
+        let anchor = current.filter(|current| Self::position(scope, Some(*current)).is_some());
+        let mut rest: Vec<usize> = scope
+            .iter()
+            .copied()
+            .filter(|index| Some(*index) != anchor)
+            .collect();
         self.shuffle(&mut rest);
-        self.bag = std::iter::once(current).chain(rest).collect();
-        self.cursor = 1;
+        self.bag = anchor.into_iter().chain(rest).collect();
+        self.cursor = usize::from(anchor.is_some());
     }
 
     pub(crate) fn clear(&mut self) {
@@ -101,24 +105,29 @@ impl PlaybackOrder {
         self.cursor
     }
 
+    /// `current` 在范围里的位置；范围按下标升序排列，可以二分查找。
+    fn position(scope: &[usize], current: Option<usize>) -> Option<usize> {
+        scope.binary_search(&current?).ok()
+    }
+
     fn next_from_bag(
         &mut self,
-        len: usize,
+        scope: &[usize],
         current: Option<usize>,
         repeat: RepeatMode,
     ) -> Option<usize> {
-        if len == 0 {
+        if scope.is_empty() {
             return None;
         }
         if self.bag.is_empty() {
-            self.reanchor(len, current.unwrap_or(0));
+            self.reanchor(scope, current);
         }
         if self.cursor >= self.bag.len() {
             match repeat {
                 RepeatMode::None => return None,
                 RepeatMode::All | RepeatMode::One => {
-                    let avoid = self.bag.last().copied().or(current).unwrap_or(0);
-                    self.reshuffle_round(len, avoid);
+                    let avoid = self.bag.last().copied().or(current);
+                    self.reshuffle_round(scope, avoid);
                 }
             }
         }
@@ -128,14 +137,11 @@ impl PlaybackOrder {
     }
 
     /// 新一轮整体洗牌；第一首避开上一轮的最后一首，接缝处不会连播同一首。
-    fn reshuffle_round(&mut self, len: usize, avoid_first: usize) {
-        let mut order: Vec<usize> = (0..len).collect();
+    fn reshuffle_round(&mut self, scope: &[usize], avoid_first: Option<usize>) {
+        let mut order = scope.to_vec();
         self.shuffle(&mut order);
-        if order.len() > 1 && order[0] == avoid_first {
-            let swap = (1..order.len())
-                .find(|index| order[*index] != avoid_first)
-                .unwrap_or(1);
-            order.swap(0, swap);
+        if order.len() > 1 && Some(order[0]) == avoid_first {
+            order.swap(0, 1);
         }
         self.bag = order;
         self.cursor = 0;
@@ -170,36 +176,75 @@ mod tests {
     #[test]
     fn sequential_modes_walk_the_library_in_order() {
         let mut order = PlaybackOrder::new(1);
+        let all_three = [0, 1, 2];
         let none = mode(RepeatMode::None, false);
-        assert_eq!(order.next(3, None, false, none), Some(0));
-        assert_eq!(order.next(3, Some(1), false, none), Some(2));
-        assert_eq!(order.next(3, Some(2), false, none), None);
-        assert!(!order.has_next(3, Some(2), none));
+        assert_eq!(order.next(&all_three, None, false, none), Some(0));
+        assert_eq!(order.next(&all_three, Some(1), false, none), Some(2));
+        assert_eq!(order.next(&all_three, Some(2), false, none), None);
+        assert!(!order.has_next(&all_three, Some(2), none));
 
         let all = mode(RepeatMode::All, false);
-        assert_eq!(order.next(3, Some(2), false, all), Some(0));
+        assert_eq!(order.next(&all_three, Some(2), false, all), Some(0));
+        assert_eq!(order.next(&all_three, None, false, all), Some(0));
 
         // 单曲循环只在自然播完时重播；出错时照常往后走。
         let one = mode(RepeatMode::One, false);
-        assert_eq!(order.next(3, Some(1), true, one), Some(1));
-        assert_eq!(order.next(3, Some(1), false, one), Some(2));
-        assert_eq!(order.next(0, None, false, all), None);
+        assert_eq!(order.next(&all_three, Some(1), true, one), Some(1));
+        assert_eq!(order.next(&all_three, Some(1), false, one), Some(2));
+        assert_eq!(order.next(&[], None, false, all), None);
+    }
+
+    #[test]
+    fn sequential_order_stays_inside_the_scope() {
+        let mut order = PlaybackOrder::new(1);
+        let folder = [2, 3, 5];
+        let none = mode(RepeatMode::None, false);
+        assert_eq!(order.next(&folder, Some(3), false, none), Some(5));
+        assert_eq!(order.next(&folder, Some(5), false, none), None);
+        assert!(!order.has_next(&folder, Some(5), none));
+        // 正在播放的曲目不在范围里时，从范围开头接着播。
+        assert_eq!(order.next(&folder, Some(0), false, none), Some(2));
+        assert!(order.has_next(&folder, Some(0), none));
+
+        let all = mode(RepeatMode::All, false);
+        assert_eq!(order.next(&folder, Some(5), false, all), Some(2));
+        assert_eq!(order.next(&folder, Some(4), false, all), Some(2));
+        // 单曲循环自然播完时重播当前曲，即使它不在范围里。
+        let one = mode(RepeatMode::One, false);
+        assert_eq!(order.next(&folder, Some(0), true, one), Some(0));
     }
 
     #[test]
     fn a_shuffle_round_plays_every_track_once_starting_after_the_anchor() {
         let mut order = PlaybackOrder::new(7);
+        let scope = [0, 1, 2, 3, 4, 5];
         let shuffle = mode(RepeatMode::None, true);
-        order.reanchor(6, 3);
+        order.reanchor(&scope, Some(3));
         assert_eq!(order.bag()[0], 3);
+        assert_eq!(order.cursor(), 1);
         let mut played: Vec<usize> = (0..5)
-            .map(|_| order.next(6, Some(3), false, shuffle).unwrap())
+            .map(|_| order.next(&scope, Some(3), false, shuffle).unwrap())
             .collect();
         assert!(!played.contains(&3));
         played.sort_unstable();
         assert_eq!(played, [0, 1, 2, 4, 5]);
-        assert_eq!(order.next(6, Some(3), false, shuffle), None);
-        assert!(!order.has_next(6, Some(3), shuffle));
+        assert_eq!(order.next(&scope, Some(3), false, shuffle), None);
+        assert!(!order.has_next(&scope, Some(3), shuffle));
+    }
+
+    #[test]
+    fn a_shuffle_round_without_an_anchor_in_scope_plays_the_whole_scope() {
+        let shuffle = mode(RepeatMode::None, true);
+        for current in [None, Some(0)] {
+            let mut order = PlaybackOrder::new(11);
+            let folder = [4, 6, 9];
+            let mut played: Vec<usize> = (0..3)
+                .map(|_| order.next(&folder, current, false, shuffle).unwrap())
+                .collect();
+            played.sort_unstable();
+            assert_eq!(played, folder, "current {current:?}");
+            assert_eq!(order.next(&folder, current, false, shuffle), None);
+        }
     }
 
     #[test]
@@ -207,10 +252,11 @@ mod tests {
         for seed in 1..200 {
             let mut order = PlaybackOrder::new(seed);
             let shuffle = mode(RepeatMode::All, true);
-            order.reanchor(3, 0);
+            let scope = [0, 1, 2];
+            order.reanchor(&scope, Some(0));
             let mut last = 0;
             for _ in 0..12 {
-                let next = order.next(3, Some(last), false, shuffle).unwrap();
+                let next = order.next(&scope, Some(last), false, shuffle).unwrap();
                 assert_ne!(next, last, "seed {seed}");
                 last = next;
             }
@@ -220,10 +266,11 @@ mod tests {
     #[test]
     fn the_same_seed_gives_the_same_order() {
         let shuffle = mode(RepeatMode::All, true);
+        let scope: Vec<usize> = (0..8).collect();
         let run = || {
             let mut order = PlaybackOrder::new(42);
             (0..10)
-                .map(|_| order.next(8, Some(0), false, shuffle))
+                .map(|_| order.next(&scope, Some(0), false, shuffle))
                 .collect::<Vec<_>>()
         };
         assert_eq!(run(), run());

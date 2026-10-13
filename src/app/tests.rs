@@ -1980,3 +1980,68 @@ fn the_library_title_names_the_folder_and_counts_it_against_the_whole_library() 
     let rows = screen_rows(&backend);
     assert!(rows[0].contains("文件夹a·2/5首"), "{}", rows[0]);
 }
+
+#[test]
+fn next_and_list_loop_stay_inside_the_folder() {
+    let (temp, mut app) = test_app(AppConfig {
+        repeat: RepeatMode::None,
+        ..AppConfig::default()
+    });
+    folder_fixture(&mut app, &temp.path().join("music"));
+    choose_folder(&mut app, 1);
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(1));
+    // 顺序播放到文件夹末尾就停，不会走进 b。
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, None);
+    assert_eq!(app.player().state(), PlayState::Stopped);
+
+    app.config.repeat = RepeatMode::All;
+    app.play_index(1, false, BagUpdate::Reanchor).unwrap();
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(0));
+}
+
+#[test]
+fn a_track_outside_the_folder_continues_at_the_folders_first_track() {
+    let (temp, mut app) = test_app(AppConfig {
+        repeat: RepeatMode::None,
+        ..AppConfig::default()
+    });
+    folder_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(4, false, BagUpdate::Reanchor).unwrap();
+
+    // 筛选不打断正在播放的曲目。
+    choose_folder(&mut app, 2);
+    assert_eq!(app.playback.playing_index, Some(4));
+    assert_eq!(app.player().state(), PlayState::Playing);
+
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(2));
+}
+
+#[test]
+fn shuffle_reshuffles_inside_the_folder_when_it_changes() {
+    let (temp, mut app) = test_app(AppConfig {
+        repeat: RepeatMode::All,
+        shuffle: true,
+        ..AppConfig::default()
+    });
+    folder_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.playback.order.bag().len(), 5);
+
+    choose_folder(&mut app, 2);
+    let mut bag = app.playback.order.bag().to_vec();
+    bag.sort_unstable();
+    assert_eq!(bag, [2, 3]);
+
+    for _ in 0..6 {
+        app.dispatch(Action::Next);
+        let playing = app.playback.playing_index.unwrap();
+        assert!([2, 3].contains(&playing), "跑出了文件夹：{playing}");
+    }
+    assert!(app.media_snapshot().can_go_next);
+}
