@@ -60,10 +60,11 @@ pub(super) fn draw_now_playing(
         format!("{}%", app.player().volume())
     };
     // 睡眠定时放在最前面：这一栏放不下时先被截掉的是末尾的队列数。
-    let sleep = app
-        .sleep_remaining()
-        .map(|remaining| format!("⏾ {} · ", fmt_duration(remaining)))
-        .unwrap_or_default();
+    let sleep = match app.sleep_remaining() {
+        Some(remaining) => format!("⏾ {} · ", fmt_duration(remaining)),
+        None if app.sleeps_at_track_end() => "⏾ 本条 · ".to_owned(),
+        None => String::new(),
+    };
     let status = format!(
         "{sleep}{} · {} · 队列 {}",
         app.playback_mode().label(),

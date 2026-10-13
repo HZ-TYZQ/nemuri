@@ -2160,7 +2160,7 @@ fn sleep_config() -> AppConfig {
 fn t_cycles_through_the_sleep_timer_presets() {
     let (_temp, mut app) = test_app(AppConfig::default());
     let mut seen = Vec::new();
-    for _ in 0..6 {
+    for _ in 0..7 {
         press(&mut app, key(KeyCode::Char('t')));
         seen.push(app.view.message.clone().unwrap());
     }
@@ -2172,10 +2172,12 @@ fn t_cycles_through_the_sleep_timer_presets() {
             "睡眠定时：60 分钟后淡出并暂停（t 切换）",
             "睡眠定时：90 分钟后淡出并暂停（t 切换）",
             "睡眠定时：120 分钟后淡出并暂停（t 切换）",
+            "睡眠定时：本条播完时停止，最后 30 秒淡出（t 切换）",
             "睡眠定时已关闭",
         ]
     );
     assert_eq!(app.sleep_remaining(), None);
+    assert!(!app.sleeps_at_track_end());
 }
 
 #[test]
@@ -2259,5 +2261,74 @@ fn the_now_playing_bar_shows_the_sleep_countdown_first() {
         screen_rows(&backend)
             .iter()
             .any(|row| row.contains("⏾15:00"))
+    );
+}
+
+/// 选到“本条播完时”：t 按 6 次。
+fn sleep_at_track_end(app: &mut App) {
+    for _ in 0..6 {
+        press(app, key(KeyCode::Char('t')));
+    }
+    assert!(app.sleeps_at_track_end());
+}
+
+#[test]
+fn sleeping_at_the_track_end_fades_the_last_seconds_and_ignores_repeat_and_queue() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::All,
+        ..AppConfig::default()
+    });
+    let long = play_long_track_at(temp.path(), &mut app, Duration::from_secs(60));
+    app.playback.queue.push_back(long);
+    sleep_at_track_end(&mut app);
+
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 1.0);
+    // 100 秒的曲目停在 85 秒：还剩 15 秒，淡出到一半。
+    assert!(app.playback.player.seek_to(Duration::from_secs(85)));
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 0.25);
+    // 往回跳转，音量回升。
+    assert!(app.playback.player.seek_to(Duration::from_secs(40)));
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 1.0);
+
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(app.playback.playing_index, None);
+    assert_eq!(app.playback.queue.len(), 1, "队列原样保留");
+    assert_eq!(control.fade_gain(), 1.0);
+    assert!(!app.sleeps_at_track_end());
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("睡眠定时：本条已播完，播放停止")
+    );
+}
+
+#[test]
+fn sleeping_at_the_track_end_beats_repeat_one() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::One,
+        ..AppConfig::default()
+    });
+    play_long_track_at(temp.path(), &mut app, Duration::from_secs(99));
+    sleep_at_track_end(&mut app);
+
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(app.playback.playing_index, None);
+}
+
+#[test]
+fn the_now_playing_bar_marks_a_track_end_timer() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    sleep_at_track_end(&mut app);
+    let (_, backend) = render(&app, 100, 24);
+    assert!(
+        screen_rows(&backend)
+            .iter()
+            .any(|row| row.contains("⏾本条·播完停止"))
     );
 }

@@ -66,7 +66,7 @@ impl App {
         }
     }
 
-    fn effective_duration(&self) -> Option<Duration> {
+    pub(super) fn effective_duration(&self) -> Option<Duration> {
         self.playback
             .player
             .duration()

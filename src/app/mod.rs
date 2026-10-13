@@ -31,6 +31,7 @@ use crate::track::Track;
 pub use action::Action;
 pub use catalog::Catalog;
 use playback::Skip;
+use sleep::SleepTimer;
 pub use state::{Playback, ViewState};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -250,6 +251,9 @@ impl App {
     pub(super) fn drain_player_events(&mut self) {
         for event in self.playback.player.drain_events() {
             match event {
+                PlayerEvent::EndOfStream if self.playback.sleep == SleepTimer::EndOfTrack => {
+                    self.sleep_at_track_end();
+                }
                 PlayerEvent::EndOfStream => self.play_next(true),
                 PlayerEvent::OutputError(error) => {
                     self.playback.spectrum.reset_output();

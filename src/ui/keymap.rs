@@ -173,7 +173,7 @@ pub(super) const LIBRARY: &[Binding] = &[
     listed("s", "开 / 关随机播放", &[(ch('s'), Action::ToggleShuffle)]),
     hinted(
         "t",
-        "睡眠定时：关 / 15–120 分钟",
+        "睡眠定时：关 / 15–120 分钟 / 本条",
         "t 定时",
         &[(ch('t'), Action::CycleSleepTimer)],
     ),
