@@ -292,8 +292,10 @@ fn rescan_resets_selection_when_selected_track_disappears() {
 
 #[test]
 fn shuffle_does_not_immediately_repeat_current_track() {
+    // 默认的播完停止在自然播完时总是返回 None，断言会形同虚设，所以显式用顺序播放。
     let config = AppConfig {
         shuffle: true,
+        repeat: RepeatMode::None,
         ..AppConfig::default()
     };
     let (_temp, mut app) = test_app(config);
@@ -312,21 +314,21 @@ fn shuffle_does_not_immediately_repeat_current_track() {
 #[test]
 fn z_cycles_repeat_only_and_s_toggles_shuffle() {
     let (_temp, mut app) = test_app(AppConfig::default());
-    assert_eq!(app.config.repeat, RepeatMode::None);
+    assert_eq!(app.config.repeat, RepeatMode::Stop);
     assert!(!app.config.shuffle);
 
     press(
         &mut app,
         KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
     );
-    assert_eq!(app.config.repeat, RepeatMode::All);
+    assert_eq!(app.config.repeat, RepeatMode::None);
     assert!(!app.config.shuffle);
 
     press(
         &mut app,
         KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
     );
-    assert_eq!(app.config.repeat, RepeatMode::All);
+    assert_eq!(app.config.repeat, RepeatMode::None);
     assert!(app.config.shuffle);
 
     press(
@@ -334,7 +336,7 @@ fn z_cycles_repeat_only_and_s_toggles_shuffle() {
         KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE),
     );
     assert!(!app.config.shuffle);
-    assert_eq!(app.config.repeat, RepeatMode::All);
+    assert_eq!(app.config.repeat, RepeatMode::None);
 }
 
 #[test]
@@ -1676,7 +1678,10 @@ fn the_lyrics_pane_stays_beside_the_library_without_lyrics() {
 
 #[test]
 fn a_natural_end_moves_on_and_repeat_one_replays_the_track() {
-    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::None,
+        ..AppConfig::default()
+    });
     let music = temp.path().join("music");
     let paths: Vec<PathBuf> = ["a.wav", "b.wav"]
         .iter()

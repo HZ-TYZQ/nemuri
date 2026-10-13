@@ -214,10 +214,10 @@ fn path_fold(track: &Track) -> String {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepeatMode {
-    /// 自然播完一首就停；手动切到下一首照常可用。
+    /// 自然播完一首就停；手动切到下一首照常可用。长录音常常听着入睡，因此是默认值。
+    #[default]
     Stop,
     /// 按列表顺序播到最后一首再停。
-    #[default]
     None,
     All,
     One,

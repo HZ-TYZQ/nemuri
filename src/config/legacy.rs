@@ -50,15 +50,20 @@ impl Default for RawConfig {
 impl RawConfig {
     fn into_config(self) -> AppConfig {
         // 新的 repeat / shuffle 优先；都没有时才看 v1.1.0 及更早的 play_mode。
+        // 旧版本没有“播完停止”，没写循环方式时一直是顺序播放，迁移后保持原样。
+        let in_order = PlaybackMode {
+            repeat: RepeatMode::None,
+            shuffle: false,
+        };
         let mode = if self.repeat.is_some() || self.shuffle.is_some() {
             PlaybackMode {
-                repeat: self.repeat.unwrap_or_default(),
-                shuffle: self.shuffle.unwrap_or(false),
+                repeat: self.repeat.unwrap_or(in_order.repeat),
+                shuffle: self.shuffle.unwrap_or(in_order.shuffle),
             }
         } else {
             self.play_mode
                 .map(LegacyPlayMode::into_playback_mode)
-                .unwrap_or_default()
+                .unwrap_or(in_order)
         };
         AppConfig {
             library_dir: self.library_dir,
@@ -131,6 +136,18 @@ mod tests {
         assert!(config.mouse_enabled);
         assert_eq!(config.repeat, RepeatMode::None);
         assert!(!config.shuffle);
+    }
+
+    #[test]
+    fn an_old_config_without_a_repeat_mode_keeps_playing_in_order() {
+        // 新配置默认“播完停止”，从旧配置迁来的用户不应被悄悄改掉习惯。
+        for contents in [
+            "version = 1\nvolume = 75\n",
+            "version = 1\nshuffle = true\n",
+        ] {
+            let config = parse(contents).unwrap();
+            assert_eq!(config.repeat, RepeatMode::None, "{contents}");
+        }
     }
 
     #[test]

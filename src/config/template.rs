@@ -101,6 +101,11 @@ mod tests {
     }
 
     #[test]
+    fn a_new_config_stops_after_each_track() {
+        assert!(render(&AppConfig::default()).contains("    repeat \"stop\"\n"));
+    }
+
+    #[test]
     fn uncommenting_a_theme_color_overrides_the_preset() {
         let text =
             render(&AppConfig::default()).replace("// border \"#8A8A8A\"", "border \"#123456\"");

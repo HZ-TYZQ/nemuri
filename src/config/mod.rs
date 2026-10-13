@@ -81,7 +81,7 @@ impl Default for AppConfig {
             library_dir: None,
             volume: 100,
             muted: false,
-            repeat: RepeatMode::None,
+            repeat: RepeatMode::Stop,
             shuffle: false,
             sort: SortOrder::default(),
             visualizer_enabled: true,
