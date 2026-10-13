@@ -20,7 +20,7 @@ const APP_DIR: &str = "tui-music-player";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
     pub config_file: PathBuf,
-    /// 1.5.0 之前的 `config.toml`，只在第一次生成 `config.kdl` 时读取。
+    /// 1.4.0 之前的 `config.toml`，只在第一次生成 `config.kdl` 时读取。
     pub legacy_config_file: PathBuf,
     pub playlists_dir: PathBuf,
     pub session_file: PathBuf,

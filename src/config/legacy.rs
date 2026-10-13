@@ -1,4 +1,4 @@
-//! 1.5.0 之前的 `config.toml`：只在第一次生成 `config.kdl` 时读一次，从不写入。
+//! 1.4.0 之前的 `config.toml`：只在第一次生成 `config.kdl` 时读一次，从不写入。
 
 use std::fs;
 use std::io;

@@ -16,6 +16,14 @@ directory overrides the library for the current session only.
 Scanning and fuzzy search run in the background. Metadata is cached in SQLite;
 settings and named playlists are stored separately according to the XDG base
 directory specification.
+.PP
+The player is aimed at long recordings such as ASMR, organised one folder per
+creator, and plays ordinary music as well. Tracks are listed by their file names
+as stored on disk, without the extension and without using tag titles; a renamed
+file shows its new name after the next scan. The second line of each entry shows
+the top-level folder under the library root, exactly as named (files directly
+in the root share a root label), followed by the artist, album, and format when
+known.
 .SH OPTIONS
 .TP
 .BI --set-library " PATH"
@@ -77,7 +85,10 @@ next launch.
 Play the next track or return through actual playback history.
 .TP
 .B z
-Cycle repeat among sequential, repeat-all, and repeat-one.
+Cycle repeat among stop-after-track, sequential, repeat-all, and repeat-one.
+Stop-after-track, the default, stops when a track ends on its own; n still
+moves on by hand and queued tracks still play. Media controls report it as no
+loop.
 .TP
 .B s
 Toggle shuffle. When enabled, the library is played as a reshuffled permutation each round.
@@ -92,7 +103,14 @@ order. Missing values always sort last. The choice is restored on the next
 launch.
 .TP
 .B /
-Enter live fuzzy search.
+Enter live fuzzy search over file names, relative paths, and tag titles,
+artists, and albums.
+.TP
+.B f
+Open the folder panel, which lists every top-level folder of the library with
+its track count. Enter shows only the selected folder; the first row shows all
+tracks again. While a folder is chosen, search, sequential playback, repeat,
+and shuffle stay inside it. The choice lasts for the current session.
 .TP
 .B r
 Rescan the library in the background.
@@ -117,7 +135,7 @@ Quit.
 Settings live in
 .IR config.kdl ,
 written in KDL v2. The player creates it with comments on first start,
-carrying over the settings of a pre-1.5.0 config.toml, which is left in
+carrying over the settings of a pre-1.4.0 config.toml, which is left in
 place.
 .PP
 .RS
@@ -126,7 +144,7 @@ library "~/Music"
 playback {
     volume 80
     muted #false
-    repeat "all"        // none, all, or one
+    repeat "stop"       // stop, none, all, or one
     shuffle #false
 }
 sort "artist" descending=#false
