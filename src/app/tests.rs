@@ -2492,3 +2492,29 @@ fn progress_survives_a_restart() {
         .unwrap();
     assert_eq!(restarted.player().position(), AT_12_34);
 }
+
+#[test]
+fn progress_follows_a_rename_on_rescan() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    recordings_fixture(&mut app, &music);
+    let mut tracks = app.catalog.tracks().to_vec();
+    for (index, track) in tracks.iter_mut().enumerate() {
+        track.file_size = 1_000 + index as u64;
+    }
+    app.catalog.set_tracks(tracks.clone());
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(AT_12_34));
+    app.dispatch(Action::Next);
+
+    // 改名后的文件大小和修改时间不变，扫描结果里只有路径和名字变了。
+    let renamed = music.join("A/rec1（改过名）.wav");
+    std::fs::rename(&tracks[0].path, &renamed).unwrap();
+    tracks[0].path = renamed.clone();
+    tracks[0].relative_path = PathBuf::from("A/rec1（改过名）.wav");
+    app.apply_scan_finished(tracks, Vec::new());
+    settle_search_and_selection(&mut app);
+
+    app.play_path(&renamed, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), AT_12_34);
+}

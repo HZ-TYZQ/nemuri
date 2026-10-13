@@ -90,6 +90,18 @@ impl App {
         }
     }
 
+    /// 扫描后把改了名的文件的进度跟过去。
+    pub(super) fn follow_renamed_progress(&mut self) {
+        if self
+            .progress
+            .store
+            .follow_renames(self.catalog.tracks(), &self.library_dir)
+        {
+            self.progress.dirty = true;
+            self.progress.urgent = true;
+        }
+    }
+
     pub(super) fn tick_progress(&mut self) {
         let playing = self.playback.player.state() == PlayState::Playing;
         // 刚停下的这个 tick 也记一次，拿到暂停时的准确位置。

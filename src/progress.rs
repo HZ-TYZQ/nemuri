@@ -4,7 +4,7 @@
 //! 记录、续播和曲库里的显示因此总是一致；时长未知的文件不记录。
 //! 文件读不了时先改名保留，再从空记录开始，下次保存不会覆盖还能找回的数据。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -138,6 +138,51 @@ impl ProgressStore {
     /// 记下 `track` 已经听完；记录有变化时返回 true。
     pub fn finish(&mut self, track: &Track) -> bool {
         self.set(track, Some(Listened::Finished))
+    }
+
+    /// 文件改名后把进度跟过去：改名不改变文件大小和修改时间。
+    ///
+    /// 只处理音乐库目录下、已经找不到的记录，而且只在新曲库里恰好有一首
+    /// 大小和修改时间都相同、自己还没有记录的曲目时才搬。对不上或有多个候选时不动，
+    /// 找不到的记录也保留（比如移动硬盘暂时没挂上）。有搬动时返回 true。
+    pub fn follow_renames(&mut self, tracks: &[Track], library_dir: &Path) -> bool {
+        let present: HashSet<&Path> = tracks.iter().map(|track| track.path.as_path()).collect();
+        let mut candidates: HashMap<(u64, i64), Vec<&Track>> = HashMap::new();
+        for track in tracks {
+            if !self.entries.contains_key(&track.path) {
+                candidates
+                    .entry((track.file_size, track.modified_ns))
+                    .or_default()
+                    .push(track);
+            }
+        }
+        let orphans: Vec<PathBuf> = self
+            .entries
+            .keys()
+            .filter(|path| path.starts_with(library_dir) && !present.contains(path.as_path()))
+            .cloned()
+            .collect();
+        let mut moved = false;
+        for orphan in orphans {
+            let entry = &self.entries[&orphan];
+            let Some([target]) = candidates
+                .get(&(entry.file_size, entry.modified_ns))
+                .map(Vec::as_slice)
+            else {
+                continue;
+            };
+            let target = target.path.clone();
+            if self.entries.contains_key(&target) {
+                continue;
+            }
+            let entry = self
+                .entries
+                .remove(&orphan)
+                .expect("orphan comes from entries");
+            self.entries.insert(target, entry);
+            moved = true;
+        }
+        moved
     }
 
     fn set(&mut self, track: &Track, listened: Option<Listened>) -> bool {
@@ -292,6 +337,61 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().contains("corrupt"))
             .count();
         assert_eq!(kept, 2);
+    }
+
+    fn file(path: &str, size: u64, modified: i64) -> Track {
+        let mut track = recording(path, 30);
+        track.file_size = size;
+        track.modified_ns = modified;
+        track
+    }
+
+    #[test]
+    fn progress_follows_a_file_renamed_inside_the_library() {
+        let mut store = ProgressStore::default();
+        let old = file("/lib/A/旧名字.flac", 100, 1);
+        store.record(&old, 5 * MINUTE, 30 * MINUTE);
+
+        let renamed = file("/lib/A/新名字（备注）.flac", 100, 1);
+        let other = file("/lib/A/别的.flac", 200, 1);
+        assert!(store.follow_renames(&[renamed.clone(), other], Path::new("/lib")));
+        assert_eq!(store.get(&old.path), None);
+        assert_eq!(
+            store.get(&renamed.path),
+            Some(Listened::InProgress(5 * MINUTE))
+        );
+        // 再扫一次没有可搬的了。
+        assert!(!store.follow_renames(&[renamed], Path::new("/lib")));
+    }
+
+    #[test]
+    fn ambiguous_or_foreign_matches_are_left_alone() {
+        let mut store = ProgressStore::default();
+        let old = file("/lib/旧.flac", 100, 1);
+        store.finish(&old);
+
+        // 两个候选：不知道是哪一个，不搬。
+        let twins = [file("/lib/甲.flac", 100, 1), file("/lib/乙.flac", 100, 1)];
+        assert!(!store.follow_renames(&twins, Path::new("/lib")));
+        // 唯一的候选自己已经有记录：不覆盖。
+        let mut store_with_target = ProgressStore::default();
+        store_with_target.finish(&old);
+        let target = file("/lib/甲.flac", 100, 1);
+        store_with_target.record(&target, 5 * MINUTE, 30 * MINUTE);
+        assert!(
+            !store_with_target.follow_renames(std::slice::from_ref(&target), Path::new("/lib"))
+        );
+        assert_eq!(
+            store_with_target.get(&target.path),
+            Some(Listened::InProgress(5 * MINUTE))
+        );
+        // 不在这个音乐库里的记录（比如另一个库或没挂上的硬盘）不动。
+        let mut elsewhere = ProgressStore::default();
+        let outside = file("/other/旧.flac", 100, 1);
+        elsewhere.finish(&outside);
+        assert!(!elsewhere.follow_renames(&[file("/lib/新.flac", 100, 1)], Path::new("/lib")));
+        assert_eq!(elsewhere.get(&outside.path), Some(Listened::Finished));
+        assert_eq!(store.get(&old.path), Some(Listened::Finished));
     }
 
     #[cfg(unix)]

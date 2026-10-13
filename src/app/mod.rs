@@ -352,6 +352,7 @@ impl App {
     fn apply_scan_finished(&mut self, tracks: Vec<Track>, warnings: Vec<String>) {
         let filtered = self.catalog.folder().cloned();
         self.replace_tracks(tracks);
+        self.follow_renamed_progress();
         // 重扫往往是因为刚放进了 .lrc 文件，下一个 tick 重新读取歌词。
         self.playback.lyrics = None;
         self.scan_progress = None;
