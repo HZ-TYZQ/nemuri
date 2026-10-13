@@ -8,7 +8,7 @@ use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph};
 use crate::app::App;
 use crate::player::PlayState;
 use crate::theme::Theme;
-use crate::track::Track;
+use crate::track::{Folder, Track};
 
 use super::ListView;
 use super::text::{column_text, fmt_duration, truncate_display};
@@ -144,9 +144,11 @@ pub(super) fn track_row_text(
         .map(fmt_duration)
         .unwrap_or_else(|| "--:--".into());
     let duration = column_text(&duration, duration_width, true);
-    // 歌手总要占个位置，第二行不会空着；专辑和格式未知时直接省略。
+    // 文件夹打头，第二行不会空着；歌手、专辑和格式未知时直接省略。
+    let folder = Folder::of(track);
     let detail = [
-        Some(track.artist.as_deref().unwrap_or("未知歌手")),
+        Some(folder.label()),
+        track.artist.as_deref(),
         track.album.as_deref(),
         track.format.as_deref(),
     ]

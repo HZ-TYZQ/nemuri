@@ -118,8 +118,8 @@ fn truncate_display_limits_by_terminal_width() {
 #[test]
 fn track_rows_fill_the_width_and_right_align_the_duration() {
     let track = Track {
-        path: PathBuf::from("/music/这是一首名字特别特别长的歌曲标题.flac"),
-        relative_path: PathBuf::from("这是一首名字特别特别长的歌曲标题.flac"),
+        path: PathBuf::from("/music/歌手/这是一首名字特别特别长的歌曲标题.flac"),
+        relative_path: PathBuf::from("歌手/这是一首名字特别特别长的歌曲标题.flac"),
         title: "标签里的标题".to_owned(),
         artist: Some("一个名字同样很长的歌手".to_owned()),
         album: Some("一张名字也非常非常长的专辑".to_owned()),
@@ -138,20 +138,20 @@ fn track_rows_fill_the_width_and_right_align_the_duration() {
         assert_eq!(first + LIST_ICON_WIDTH, usable, "usable={usable}");
         assert_eq!(duration, "1:01:01");
         assert!(UnicodeWidthStr::width(detail.as_str()) + LIST_ICON_WIDTH <= usable);
-        assert!(detail.starts_with("一个"), "详情应以歌手开头：{detail:?}");
+        assert!(detail.starts_with("歌手"), "详情应以文件夹开头：{detail:?}");
     }
 
     let (title, _, detail) = track_row_text(&track, 200, duration_width);
     assert!(title.starts_with("这是一首名字特别特别长的歌曲标题 "));
     assert_eq!(
         detail,
-        "一个名字同样很长的歌手 · 一张名字也非常非常长的专辑 · FLAC"
+        "歌手 · 一个名字同样很长的歌手 · 一张名字也非常非常长的专辑 · FLAC"
     );
 }
 
 #[test]
-fn track_row_detail_skips_unknown_album_and_format_but_not_the_artist() {
-    let track = Track {
+fn track_row_detail_leads_with_the_folder_and_skips_unknown_fields() {
+    let mut track = Track {
         path: PathBuf::from("/music/a.mp3"),
         relative_path: PathBuf::from("a.mp3"),
         title: "Song".to_owned(),
@@ -166,7 +166,16 @@ fn track_row_detail_skips_unknown_album_and_format_but_not_the_artist() {
     };
     let (_, duration, detail) = track_row_text(&track, 60, 5);
     assert_eq!(duration, "--:--");
-    assert_eq!(detail, "未知歌手");
+    assert_eq!(detail, "(根目录)");
+
+    // 文件夹名原样显示，没有歌手标签时直接省略，不写“未知歌手”。
+    track.relative_path = PathBuf::from("ASMR(衣鶴)/合集/音频 - 掏耳.flac");
+    track.format = Some("FLAC".to_owned());
+    let (_, _, detail) = track_row_text(&track, 60, 5);
+    assert_eq!(detail, "ASMR(衣鶴) · FLAC");
+    track.artist = Some("衣鹤".to_owned());
+    let (_, _, detail) = track_row_text(&track, 60, 5);
+    assert_eq!(detail, "ASMR(衣鶴) · 衣鹤 · FLAC");
 }
 
 #[test]

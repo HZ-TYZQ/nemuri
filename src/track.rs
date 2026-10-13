@@ -1,7 +1,7 @@
 //! 曲目和播放顺序等核心数据模型。
 
 use std::cmp::Ordering;
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,34 @@ impl Track {
             self.album.clone().unwrap_or_default(),
             self.relative_path.to_string_lossy().into_owned(),
         ]
+    }
+}
+
+/// 曲目所在的分组：音乐库根目录下的第一层文件夹，名称原样保留，不解析命名规律。
+/// 更深的子文件夹归入它所在的第一层文件夹。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Folder {
+    /// 直接放在音乐库根目录下的文件。
+    Root,
+    Named(String),
+}
+
+impl Folder {
+    pub fn of(track: &Track) -> Self {
+        let mut components = track.relative_path.components();
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(first)), Some(_)) => {
+                Self::Named(first.to_string_lossy().into_owned())
+            }
+            _ => Self::Root,
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            Self::Root => "(根目录)",
+            Self::Named(name) => name,
+        }
     }
 }
 
@@ -302,6 +330,22 @@ mod tests {
         assert_eq!(dotted.display_title(), "音频 - 甘やかし_ 9.10");
         let no_extension = track("x", None, None, "A/B/录音");
         assert_eq!(no_extension.display_title(), "录音");
+    }
+
+    #[test]
+    fn the_folder_is_the_first_directory_under_the_library_root() {
+        let folder = |path: &str| Folder::of(&track("x", None, None, path));
+        assert_eq!(
+            folder("ASMR(Other)_author)/音频 - 涩涩ASMR.mp3"),
+            Folder::Named("ASMR(Other)_author)".to_owned())
+        );
+        // 更深的子文件夹归入第一层，名称不做任何解析。
+        assert_eq!(
+            folder("创作者/2026/录音.flac"),
+            Folder::Named("创作者".to_owned())
+        );
+        assert_eq!(folder("根目录里的歌.flac"), Folder::Root);
+        assert_eq!(Folder::Root.label(), "(根目录)");
     }
 
     #[test]

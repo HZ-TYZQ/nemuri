@@ -7,6 +7,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::App;
 use crate::theme::Theme;
+use crate::track::Folder;
 
 use super::library::{LIST_ICON_WIDTH, playback_action_indicator};
 use super::lyrics::inline_lyric;
@@ -58,8 +59,14 @@ pub(super) fn draw_now_playing(
         Some(track) => {
             let (icon, style) = playback_action_indicator(app.player().state(), theme);
             let budget = usize::from(top[0].width).saturating_sub(LIST_ICON_WIDTH);
-            let (title, artist) =
-                now_playing_text(track.display_title(), track.artist.as_deref(), budget);
+            // 没有歌手标签时用文件夹名代替：ASMR 通常按创作者分文件夹。
+            let folder = Folder::of(track);
+            let byline = match (&track.artist, &folder) {
+                (Some(artist), _) => Some(artist.as_str()),
+                (None, Folder::Named(name)) => Some(name.as_str()),
+                (None, Folder::Root) => None,
+            };
+            let (title, artist) = now_playing_text(track.display_title(), byline, budget);
             Line::from(vec![
                 Span::styled(icon, style),
                 Span::styled(title, Style::new().fg(theme.primary).bold()),

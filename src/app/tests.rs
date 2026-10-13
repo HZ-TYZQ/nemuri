@@ -1500,6 +1500,36 @@ fn screen_rows(backend: &ratatui::backend::TestBackend) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn now_playing_names_the_folder_when_the_artist_tag_is_missing() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    let mut tracks = vec![
+        nested_track(&music, "ASMR(月紫)/音频 - 睡眠誘導.wav"),
+        nested_track(&music, "ASMR(衣鶴)/音频 - 掏耳合集.wav"),
+    ];
+    tracks[1].artist = Some("衣鹤".to_owned());
+    for item in &tracks {
+        std::fs::create_dir_all(item.path.parent().unwrap()).unwrap();
+        write_test_wav(&item.path);
+    }
+    app.catalog.set_tracks(tracks);
+
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    let (_, backend) = render(&app, 100, 24);
+    let rows = screen_rows(&backend);
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("音频-睡眠誘導—ASMR(月紫)"))
+    );
+
+    // 有歌手标签时照旧显示歌手。
+    app.play_index(1, false, BagUpdate::Reanchor).unwrap();
+    let (_, backend) = render(&app, 100, 24);
+    let rows = screen_rows(&backend);
+    assert!(rows.iter().any(|row| row.contains("音频-掏耳合集—衣鹤")));
+}
+
 /// 播放带同名 .lrc 的 100 秒测试曲，停在 35 秒（第二句）。
 fn play_track_with_lyrics(temp: &Path, app: &mut App) {
     std::fs::write(
