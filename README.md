@@ -239,7 +239,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets --locked
 
 ./packaging/build-rpm.sh
-sudo dnf install ./packaging/rpmbuild/RPMS/x86_64/nemuri-1.4.0-1.fc44.x86_64.rpm
+sudo dnf install ./packaging/rpmbuild/RPMS/x86_64/nemuri-2.0.0-1.fc44.x86_64.rpm
 ```
 
 RPM 构建脚本会生成离线 vendor 归档、二进制 RPM 和 SRPM。安装后的 RPM 同时提供命令行程序、man 手册、桌面菜单入口、可缩放 SVG 图标和 48 px 兼容图标。升级使用 `sudo dnf upgrade <RPM 路径>`，卸载使用 `sudo dnf remove nemuri`。

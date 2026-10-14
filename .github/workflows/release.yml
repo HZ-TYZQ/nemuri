@@ -66,6 +66,11 @@ jobs:
             exit 1
           fi
           echo "version=$cargo_version" >> "$GITHUB_OUTPUT"
+      - name: Check release notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: test -s "docs/releases/$RELEASE_TAG.md"
 
   rpm:
     needs: metadata
@@ -152,6 +157,9 @@ jobs:
     needs: [metadata, rpm, windows-package]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.metadata.outputs.tag }}
       - uses: actions/download-artifact@v8
         with:
           pattern: '*-rpms'
@@ -173,5 +181,6 @@ jobs:
       - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ needs.metadata.outputs.tag }}
+          body_path: docs/releases/${{ needs.metadata.outputs.tag }}.md
           generate_release_notes: true
           files: release-assets/**/*

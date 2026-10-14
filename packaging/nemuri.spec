@@ -1,5 +1,5 @@
 Name:           nemuri
-Version:        1.4.0
+Version:        2.0.0
 Release:        1%{?dist}
 Summary:        Terminal player for ASMR and music
 
@@ -61,6 +61,14 @@ install -Dpm 0644 assets/icons/%{name}-48.png %{buildroot}%{_datadir}/icons/hico
 %{_datadir}/icons/hicolor/48x48/apps/%{name}.png
 
 %changelog
+* Wed Oct 14 2026 HZ-TYZQ - 2.0.0-1
+- Rename Music Player to Nemuri and migrate settings and user data
+- Replace the old music-player RPM on upgrade
+- Display file names and filter the library and playback by folder
+- Add sleep timers with fade-out and resume progress for long recordings
+- Add stop-after-track mode, media-control privacy, and channel controls
+- Fix queue reordering, playback position, and startup warning display
+
 * Tue Oct 06 2026 HZ-TYZQ - 1.4.0-1
 - Move settings to a hand-editable config.kdl; on exit only the settings
   changed while running are written back, keeping comments and layout
