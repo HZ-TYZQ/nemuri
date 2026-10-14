@@ -409,6 +409,19 @@ mod tests {
     }
 
     #[test]
+    fn metadata_without_a_path_has_no_url() {
+        let mut snapshot = MediaSnapshot::empty();
+        snapshot.title = "正在播放".to_owned();
+        assert_eq!(metadata(&snapshot).url(), None);
+
+        snapshot.path = Some(std::path::PathBuf::from("/music/a.flac"));
+        assert_eq!(
+            metadata(&snapshot).url().as_deref(),
+            Some("file:///music/a.flac")
+        );
+    }
+
+    #[test]
     fn stop_after_track_is_reported_as_no_loop() {
         assert_eq!(loop_status(RepeatMode::Stop), LoopStatus::None);
         assert_eq!(loop_status(RepeatMode::None), LoopStatus::None);

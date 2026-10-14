@@ -74,6 +74,8 @@ pub struct AppConfig {
     pub visualizer_enabled: bool,
     pub mouse_enabled: bool,
     pub lyrics_enabled: bool,
+    /// 隐私模式：系统媒体控制只收到“正在播放”，不知道标题、歌手、专辑和文件路径。
+    pub privacy: bool,
     /// 睡眠定时到点前淡出的时长。启动时读取，运行中不会改变，也从不写回。
     pub sleep_fade: Duration,
     /// 启动时按 `theme {}` 得出，运行中不会改变，也从不写回。
@@ -92,6 +94,7 @@ impl Default for AppConfig {
             visualizer_enabled: true,
             mouse_enabled: true,
             lyrics_enabled: true,
+            privacy: false,
             sleep_fade: Duration::from_secs(30),
             theme: Theme::default(),
         }

@@ -447,7 +447,7 @@ fn help_lines_align_their_descriptions() {
     let lines = keymap::help_lines();
     assert_eq!(
         lines.len(),
-        22,
+        23,
         "帮助行数变了：README 和手册页的按键表也要跟着改"
     );
     for (line, binding) in lines

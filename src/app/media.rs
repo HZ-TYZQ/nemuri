@@ -7,6 +7,9 @@ use crate::player::PlayState;
 
 use super::App;
 
+/// 隐私模式下交给系统媒体控制的标题。
+const PRIVATE_TITLE: &str = "正在播放";
+
 impl App {
     pub(super) fn seek_rel_micros(&mut self, offset: i64) {
         if self.output_blocks_playback() {
@@ -85,16 +88,33 @@ impl App {
         std::mem::take(&mut self.playback.media_events)
     }
 
+    /// 隐私模式下只交出通用标题：桌面和锁屏的媒体小组件、连着的手机都看不到
+    /// 在听什么。时长、位置和各项控制照常，播放器仍然可以从系统那边操作。
+    pub(super) fn toggle_privacy(&mut self) {
+        self.config.privacy = !self.config.privacy;
+        self.view.message = Some(
+            if self.config.privacy {
+                "隐私模式已开启：系统媒体控制只显示“正在播放”"
+            } else {
+                "隐私模式已关闭"
+            }
+            .to_owned(),
+        );
+    }
+
     pub fn media_snapshot(&self) -> MediaSnapshot {
         let track = self.current_track();
+        let shown = track.filter(|_| !self.config.privacy);
         MediaSnapshot {
             status: self.playback.player.state(),
-            title: track
-                .map(|track| track.display_title().to_owned())
-                .unwrap_or_default(),
-            artist: track.and_then(|track| track.artist.clone()),
-            album: track.and_then(|track| track.album.clone()),
-            path: track.map(|track| track.path.clone()),
+            title: match (track, shown) {
+                (_, Some(track)) => track.display_title().to_owned(),
+                (Some(_), None) => PRIVATE_TITLE.to_owned(),
+                (None, None) => String::new(),
+            },
+            artist: shown.and_then(|track| track.artist.clone()),
+            album: shown.and_then(|track| track.album.clone()),
+            path: shown.map(|track| track.path.clone()),
             duration: self.effective_duration(),
             position: self.playback.player.position(),
             volume: self.playback.player.volume(),

@@ -65,8 +65,13 @@ pub(super) fn draw_now_playing(
         None if app.sleeps_at_track_end() => "⏾ 本条 · ".to_owned(),
         None => String::new(),
     };
+    let privacy = if app.config().privacy {
+        "隐私 · "
+    } else {
+        ""
+    };
     let status = format!(
-        "{sleep}{} · {} · 队列 {}",
+        "{sleep}{privacy}{} · {} · 队列 {}",
         app.playback_mode().label(),
         volume,
         app.playback().queue.len()

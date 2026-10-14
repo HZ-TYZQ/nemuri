@@ -2318,6 +2318,70 @@ fn changing_tracks_keeps_the_fade_and_t_restores_full_volume() {
 }
 
 #[test]
+fn privacy_mode_hides_what_is_playing_from_the_system_media_controls() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let path = temp.path().join("music").join("耳语.wav");
+    write_test_wav(&path);
+    let mut item = long_track(&path);
+    item.artist = Some("某人".to_owned());
+    item.album = Some("合集".to_owned());
+    app.catalog.set_tracks(vec![item]);
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(Duration::from_secs(40)));
+
+    let open = app.media_snapshot();
+    assert_eq!(open.title, "耳语");
+    assert_eq!(open.artist.as_deref(), Some("某人"));
+    assert_eq!(open.path.as_deref(), Some(path.as_path()));
+
+    press(&mut app, key(KeyCode::Char('i')));
+    assert!(app.config.privacy);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("隐私模式已开启：系统媒体控制只显示“正在播放”")
+    );
+    let private = app.media_snapshot();
+    assert_eq!(private.title, "正在播放");
+    assert_eq!(private.artist, None);
+    assert_eq!(private.album, None);
+    assert_eq!(private.path, None);
+    // 系统那边照常能看进度、暂停和跳转。
+    assert_eq!(private.duration, open.duration);
+    assert_eq!(private.position, open.position);
+    assert_eq!(private.status, open.status);
+    assert_eq!(private.track_id, open.track_id);
+    assert!(private.identity_changed(&open));
+
+    press(&mut app, key(KeyCode::Char('i')));
+    assert!(!app.config.privacy);
+    assert_eq!(app.view.message.as_deref(), Some("隐私模式已关闭"));
+    assert_eq!(app.media_snapshot(), open);
+}
+
+#[test]
+fn privacy_mode_without_a_track_reports_no_title() {
+    let (_temp, app) = test_app(AppConfig {
+        privacy: true,
+        ..AppConfig::default()
+    });
+    assert_eq!(app.media_snapshot().title, "");
+}
+
+#[test]
+fn the_now_playing_bar_marks_privacy_mode() {
+    let (_temp, app) = test_app(AppConfig {
+        privacy: true,
+        ..AppConfig::default()
+    });
+    let (_, backend) = render(&app, 100, 24);
+    assert!(
+        screen_rows(&backend)
+            .iter()
+            .any(|row| row.contains("隐私·播完停止·100%·队列0"))
+    );
+}
+
+#[test]
 fn the_now_playing_bar_shows_the_sleep_countdown_first() {
     let (_temp, mut app) = test_app(AppConfig::default());
     press(&mut app, key(KeyCode::Char('t')));

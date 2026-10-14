@@ -46,6 +46,8 @@ pub enum Action {
     ToggleVisualizer,
     ToggleLyrics,
     ToggleMouse,
+    /// 隐私模式：系统媒体控制只显示通用标题。
+    TogglePrivacy,
     CycleSort,
     ToggleSortDirection,
     Rescan,
@@ -141,6 +143,7 @@ impl App {
             Action::ToggleVisualizer => self.toggle_visualizer(),
             Action::ToggleLyrics => self.toggle_lyrics(),
             Action::ToggleMouse => self.toggle_mouse(),
+            Action::TogglePrivacy => self.toggle_privacy(),
             Action::CycleSort => self.cycle_sort(),
             Action::ToggleSortDirection => self.toggle_sort_direction(),
             Action::Rescan => {

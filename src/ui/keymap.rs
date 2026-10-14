@@ -198,6 +198,11 @@ pub(super) const LIBRARY: &[Binding] = &[
         ],
     ),
     listed("M", "开 / 关鼠标", &[(ch('M'), Action::ToggleMouse)]),
+    listed(
+        "i",
+        "隐私模式（系统媒体控制不显示标题）",
+        &[(ch('i'), Action::TogglePrivacy)],
+    ),
     hinted(
         "/",
         "实时模糊搜索",

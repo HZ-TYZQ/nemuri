@@ -36,6 +36,8 @@ interface {{
     visualizer {visualizer}
     lyrics {lyrics}
     mouse {mouse}
+    // 隐私模式（i）：系统媒体控制只显示“正在播放”，不发送标题、歌手、专辑和文件路径
+    privacy {privacy}
 }}
 
 sleep {{
@@ -66,6 +68,7 @@ theme {{
         visualizer = flag(config.visualizer_enabled),
         lyrics = flag(config.lyrics_enabled),
         mouse = flag(config.mouse_enabled),
+        privacy = flag(config.privacy),
         fade = config.sleep_fade.as_secs(),
     )
 }
@@ -96,6 +99,7 @@ mod tests {
                 visualizer_enabled: false,
                 mouse_enabled: false,
                 lyrics_enabled: false,
+                privacy: true,
                 sleep_fade: std::time::Duration::from_secs(90),
                 theme: Theme::default(),
             },

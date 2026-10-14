@@ -236,6 +236,7 @@ impl Reader<'_> {
                 "visualizer" => self.flag(node, &mut config.visualizer_enabled),
                 "lyrics" => self.flag(node, &mut config.lyrics_enabled),
                 "mouse" => self.flag(node, &mut config.mouse_enabled),
+                "privacy" => self.flag(node, &mut config.privacy),
                 _ => self.unknown(node),
             }
         }
@@ -481,6 +482,12 @@ fn edits(start: &AppConfig, now: &AppConfig) -> Vec<Edit> {
         "interface",
         "mouse",
         now.mouse_enabled.into(),
+    );
+    child(
+        start.privacy != now.privacy,
+        "interface",
+        "privacy",
+        now.privacy.into(),
     );
     if start.sort.key != now.sort.key {
         edits.push(Edit::SortKey(now.sort.key));
@@ -778,6 +785,7 @@ mod tests {
                 visualizer #false
                 lyrics #false
                 mouse #false
+                privacy #true
             }
             sleep {
                 fade 45
@@ -806,6 +814,7 @@ mod tests {
                 visualizer_enabled: false,
                 mouse_enabled: false,
                 lyrics_enabled: false,
+                privacy: true,
                 sleep_fade: Duration::from_secs(45),
                 theme,
             }
@@ -963,6 +972,17 @@ mod tests {
         assert_eq!(updated, "// 只有注释\nplayback {\n    muted #true\n}\n");
         let updated = changed("", |config| config.muted = true);
         assert_eq!(updated, "playback {\n    muted #true\n}\n");
+    }
+
+    #[test]
+    fn privacy_mode_is_written_back_into_the_interface_block() {
+        let updated = changed("interface {\n    mouse #true\n}\n", |config| {
+            config.privacy = true;
+        });
+        assert_eq!(
+            updated,
+            "interface {\n    mouse #true\n    privacy #true\n}\n"
+        );
     }
 
     #[test]

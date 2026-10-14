@@ -75,6 +75,7 @@ impl MediaSnapshot {
             || self.title != other.title
             || self.artist != other.artist
             || self.album != other.album
+            || self.path != other.path
             || self.duration != other.duration
     }
 }
