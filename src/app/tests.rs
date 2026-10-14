@@ -2823,6 +2823,70 @@ fn a_remembered_folder_that_is_gone_shows_everything() {
 }
 
 #[test]
+fn a_startup_note_outlasts_the_first_scan_and_the_restored_session() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let long = play_long_track_at(temp.path(), &mut app, Duration::from_secs(40));
+    app.save_session().unwrap();
+    drop(app);
+
+    let music = temp.path().join("music");
+    let paths = AppPaths::from_roots(
+        temp.path().join("config"),
+        temp.path().join("data"),
+        temp.path().join("cache"),
+        Some(music.clone()),
+    );
+    let note = "config.kdl 有误: 第 2 行 volume 的值 900 应为 0–100 的整数，已忽略";
+    let mut app = App::with_player(
+        Box::new(FakeBackend::new().0),
+        music,
+        paths,
+        AppConfig::default(),
+        Some(note.to_owned()),
+        false,
+    )
+    .unwrap();
+    app.apply_scan_finished(vec![long_track(&long)], Vec::new());
+    settle_search_and_selection(&mut app);
+
+    // 上次的曲目照样恢复，只是底栏留给启动时的提示。
+    assert_eq!(app.playback.player.state(), PlayState::Paused);
+    assert_eq!(
+        app.current_track().map(|t| t.path.clone()),
+        Some(long.clone())
+    );
+    assert_eq!(app.view.message.as_deref(), Some(note));
+
+    // 之后的重扫照常报告结果。
+    app.apply_scan_finished(vec![long_track(&long)], Vec::new());
+    assert_eq!(app.view.message.as_deref(), Some("扫描完成，共 1 首歌曲"));
+}
+
+#[test]
+fn a_startup_note_already_replaced_by_the_user_is_not_brought_back() {
+    let temp = tempfile::tempdir().unwrap();
+    let music = temp.path().join("music");
+    let paths = AppPaths::from_roots(
+        temp.path().join("config"),
+        temp.path().join("data"),
+        temp.path().join("cache"),
+        Some(music.clone()),
+    );
+    let mut app = App::with_player(
+        Box::new(FakeBackend::new().0),
+        music.clone(),
+        paths,
+        AppConfig::default(),
+        Some("已把 tui-music-player 目录里的设置和播放记录复制到新目录".to_owned()),
+        false,
+    )
+    .unwrap();
+    press(&mut app, key(KeyCode::Char('m')));
+    app.apply_scan_finished(vec![track(music.join("a.wav"))], Vec::new());
+    assert_eq!(app.view.message.as_deref(), Some("扫描完成，共 1 首歌曲"));
+}
+
+#[test]
 fn reordering_the_queue_right_after_a_natural_end_stays_in_range() {
     let (temp, mut app, control) = test_app_with_control(AppConfig::default());
     let paths = recordings_fixture(&mut app, &temp.path().join("music"));

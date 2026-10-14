@@ -84,6 +84,9 @@ pub struct App {
     save_config_on_exit: bool,
     /// 上次退出时的曲目与位置，等第一次扫描完成、曲库就绪后再恢复。
     pending_session: Option<Session>,
+    /// 启动时的提示：配置写错了、刚复制了旧目录、播放列表或进度读不了。
+    /// 第一次扫描完成时的提示会盖掉它；那时它还没被别的操作换掉，就放回底栏。
+    startup_note: Option<String>,
     /// 最近一次 tick 的时间。按键在两次 tick 之间处理，定时以它为准，
     /// 误差不超过一个 tick（几十毫秒）。
     now: Instant,
@@ -131,11 +134,12 @@ impl App {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
+        let startup_note = initial_warning.or(playlist_warning).or(progress_warning);
         Ok(Self {
             catalog: Catalog::new(),
             playback: Playback::new(player, seed),
             view: ViewState {
-                message: initial_warning.or(playlist_warning).or(progress_warning),
+                message: startup_note.clone(),
                 ..ViewState::default()
             },
             playlists,
@@ -149,6 +153,7 @@ impl App {
             should_quit: false,
             save_config_on_exit,
             pending_session,
+            startup_note,
             now,
         })
     }
@@ -352,6 +357,10 @@ impl App {
     /// 应用一次完整扫描结果，并按路径尽量保留正在播放与选中的歌曲位置。
     fn apply_scan_finished(&mut self, tracks: Vec<Track>, warnings: Vec<String>) {
         let filtered = self.catalog.folder().cloned();
+        let startup_note = self
+            .startup_note
+            .take()
+            .filter(|note| self.view.message.as_ref() == Some(note));
         self.replace_tracks(tracks);
         self.follow_renamed_progress();
         // 重扫往往是因为刚放进了 .lrc 文件，下一个 tick 重新读取歌词。
@@ -367,6 +376,10 @@ impl App {
             ))
         };
         self.restore_session();
+        // 启动时的提示比扫描完成、恢复播放更要紧；曲目数在标题栏，恢复的曲目在播放区域都看得到。
+        if let Some(note) = startup_note {
+            self.view.message = Some(note);
+        }
         // 放在恢复会话之后，这条说明才不会被恢复提示覆盖。
         if let Some(folder) = filtered
             && self.catalog.folder().is_none()
