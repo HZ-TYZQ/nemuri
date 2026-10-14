@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lofty::file::FileType;
 use lofty::probe::Probe;
@@ -21,6 +21,8 @@ use super::{PlayState, PlaybackBackend, PlayerEvent};
 const EARLY_EOS_TOLERANCE: Duration = Duration::from_secs(1);
 const SEEK_END_GUARD: Duration = Duration::from_millis(50);
 const POSITION_TRUST_WINDOW: Duration = Duration::from_millis(100);
+/// Rodio 的计时通常几毫秒内就赶上；过了这么久还对不上，就说明估计本身不对，以 Rodio 为准。
+const PENDING_POSITION_LIMIT: Duration = Duration::from_secs(1);
 const HEADLESS_CHANNELS: u16 = 2;
 const HEADLESS_SAMPLE_RATE: u32 = 44_100;
 
@@ -65,7 +67,8 @@ pub struct Player {
     spectrum_live: Arc<AtomicBool>,
     is_playing: AtomicBool,
     pcm_slot: Arc<Mutex<Option<PcmBatch>>>,
-    force_position: Mutex<Option<Duration>>,
+    /// 装载、跳转或停止之后，Rodio 的计时还没赶上时用的估计值。
+    pending_position: Mutex<Option<PendingPosition>>,
     // 恢复时先 seek 解码器，Rodio 的计时从接入时的 0 开始。
     // 后续正常 seek 会把 Rodio 的计时设为绝对位置，此时清除偏移。
     position_offset: Mutex<Duration>,
@@ -170,7 +173,7 @@ impl Player {
             spectrum_live,
             is_playing: AtomicBool::new(false),
             pcm_slot,
-            force_position: Mutex::new(None),
+            pending_position: Mutex::new(None),
             position_offset: Mutex::new(Duration::ZERO),
             _spectrum: spectrum,
             output_fault: None,
@@ -280,7 +283,7 @@ impl Player {
         self.current_path = Some(path.to_path_buf());
         self.current_duration = duration;
         *self.position_offset.lock().unwrap() = position;
-        self.set_forced_position(position);
+        self.set_pending_position(position);
         self.is_playing
             .store(target == PlayState::Playing, Ordering::Relaxed);
         self.refresh_spectrum_live();
@@ -383,11 +386,19 @@ impl Player {
         }
     }
 
-    fn set_forced_position(&self, position: Duration) {
-        *self
-            .force_position
+    /// 在 `state` 已经改好之后调用：播放中的估计值随时间往前走。
+    fn set_pending_position(&self, position: Duration) {
+        *self.pending() = Some(PendingPosition::new(
+            position,
+            self.state == PlayState::Playing,
+            Instant::now(),
+        ));
+    }
+
+    fn pending(&self) -> std::sync::MutexGuard<'_, Option<PendingPosition>> {
+        self.pending_position
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(position);
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -420,6 +431,9 @@ impl PlaybackBackend for Player {
         self.recovery = None;
         if self.state == PlayState::Playing {
             self.backend.pause();
+            if let Some(pending) = self.pending().as_mut() {
+                pending.pause(Instant::now());
+            }
             self.state = PlayState::Paused;
             self.is_playing.store(false, Ordering::Relaxed);
             self.refresh_spectrum_live();
@@ -433,6 +447,9 @@ impl PlaybackBackend for Player {
         }
         if self.state == PlayState::Paused {
             self.backend.play();
+            if let Some(pending) = self.pending().as_mut() {
+                pending.resume(Instant::now());
+            }
             self.state = PlayState::Playing;
             self.is_playing.store(true, Ordering::Relaxed);
             self.refresh_spectrum_live();
@@ -450,7 +467,7 @@ impl PlaybackBackend for Player {
         self.current_path = None;
         self.current_duration = None;
         *self.position_offset.lock().unwrap() = Duration::ZERO;
-        self.set_forced_position(Duration::ZERO);
+        self.set_pending_position(Duration::ZERO);
         self.is_playing.store(false, Ordering::Relaxed);
         self.refresh_spectrum_live();
     }
@@ -460,19 +477,15 @@ impl PlaybackBackend for Player {
             return position;
         }
         let backend = self.backend.get_pos() + *self.position_offset.lock().unwrap();
-        let mut forced = self
-            .force_position
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(fallback) = *forced {
-            let delta = backend.abs_diff(fallback);
-            if delta <= POSITION_TRUST_WINDOW {
-                *forced = None;
-                return backend;
+        let now = Instant::now();
+        let mut pending = self.pending();
+        match *pending {
+            Some(estimate) if !estimate.settled_by(backend, now) => estimate.expected(now),
+            _ => {
+                *pending = None;
+                backend
             }
-            return fallback;
         }
-        backend
     }
 
     fn duration(&self) -> Option<Duration> {
@@ -486,7 +499,7 @@ impl PlaybackBackend for Player {
         let target = clamp_seek_target(pos, self.current_duration);
         if self.backend.try_seek(target).is_ok() {
             *self.position_offset.lock().unwrap() = Duration::ZERO;
-            self.set_forced_position(target);
+            self.set_pending_position(target);
             true
         } else {
             false
@@ -708,6 +721,54 @@ impl<S: Source<Item = f32>> Source for EndSignal<S> {
     }
 }
 
+/// 装载、跳转或停止之后，Rodio 的计时可能还停在旧值上（新曲目还没被音频线程接上，
+/// 或者跳转没有真正执行）。这段时间里按设定的位置和此后实际播放的时长估计当前位置。
+///
+/// 只拿 Rodio 的读数和设定的位置比，播放中头一次读位置晚于信任窗口时两者就永远对不上，
+/// 位置会一直停在设定值上；估计值随播放往前走，才不会这样。
+#[derive(Debug, Clone, Copy)]
+struct PendingPosition {
+    /// 设定的位置，加上之前几段播放走过的时间。
+    position: Duration,
+    /// 播放中时这一段开始的时刻；暂停时为 None。
+    playing_since: Option<Instant>,
+    set_at: Instant,
+}
+
+impl PendingPosition {
+    fn new(position: Duration, playing: bool, now: Instant) -> Self {
+        Self {
+            position,
+            playing_since: playing.then_some(now),
+            set_at: now,
+        }
+    }
+
+    fn expected(&self, now: Instant) -> Duration {
+        self.position
+            + self
+                .playing_since
+                .map_or(Duration::ZERO, |since| now.saturating_duration_since(since))
+    }
+
+    fn pause(&mut self, now: Instant) {
+        self.position = self.expected(now);
+        self.playing_since = None;
+    }
+
+    fn resume(&mut self, now: Instant) {
+        if self.playing_since.is_none() {
+            self.playing_since = Some(now);
+        }
+    }
+
+    /// Rodio 的读数和估计值相差在信任窗口内，或者已经等得够久，就改用 Rodio 的读数。
+    fn settled_by(&self, backend: Duration, now: Instant) -> bool {
+        backend.abs_diff(self.expected(now)) <= POSITION_TRUST_WINDOW
+            || now.saturating_duration_since(self.set_at) >= PENDING_POSITION_LIMIT
+    }
+}
+
 fn duration_to_samples(position: Duration, channels: u64, rate: u64) -> u64 {
     if channels == 0 || rate == 0 {
         return 0;
@@ -786,6 +847,37 @@ fn reject_unsupported(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ms(value: u64) -> Duration {
+        Duration::from_millis(value)
+    }
+
+    #[test]
+    fn the_pending_position_moves_on_while_playing_and_waits_while_paused() {
+        let start = Instant::now();
+        let mut pending = PendingPosition::new(ms(10_000), true, start);
+        assert_eq!(pending.expected(start + ms(300)), ms(10_300));
+        pending.pause(start + ms(300));
+        assert_eq!(pending.expected(start + ms(900)), ms(10_300));
+        pending.resume(start + ms(900));
+        assert_eq!(pending.expected(start + ms(950)), ms(10_350));
+
+        let paused = PendingPosition::new(ms(5_000), false, start);
+        assert_eq!(paused.expected(start + ms(500)), ms(5_000));
+    }
+
+    #[test]
+    fn rodio_is_trusted_once_it_agrees_even_when_the_first_read_is_late() {
+        let start = Instant::now();
+        let pending = PendingPosition::new(ms(10_000), true, start);
+        // 头一次读位置时已经播了 300ms，Rodio 报 10.3s：和估计一致，改用 Rodio。
+        // 以前只和 10s 比，这里会对不上，位置从此停在 10s。
+        assert!(pending.settled_by(ms(10_290), start + ms(300)));
+        // Rodio 还停在上一首的位置：先用估计值。
+        assert!(!pending.settled_by(ms(95_000), start + ms(20)));
+        // 等了一秒还对不上，以 Rodio 为准。
+        assert!(pending.settled_by(ms(95_000), start + ms(1_000)));
+    }
 
     #[test]
     fn early_eos_is_classified_as_error() {

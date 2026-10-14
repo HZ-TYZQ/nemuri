@@ -334,12 +334,9 @@ fn open_at_then_resume_plays_on_from_the_saved_position() {
 
     player.resume();
     assert_eq!(player.state(), PlayState::Playing);
-    // 和界面一样每帧读一次位置：装载后的头一次读取要在 100ms 的信任窗口内。
-    let mut position = player.position();
-    for _ in 0..5 {
-        sleep(Duration::from_millis(40));
-        position = player.position();
-    }
+    // 装载之后头一次读位置故意晚一些，位置也要往前走。
+    sleep(Duration::from_millis(200));
+    let position = player.position();
     assert!(
         position > Duration::from_millis(1600) && position < Duration::from_millis(2300),
         "续播应从 1.5s 往后走，实际 {position:?}"
@@ -378,6 +375,32 @@ fn balance_and_swap_keep_mono_positions_and_the_end_in_real_time() {
         sleep(Duration::from_millis(10));
     };
     assert!(events.contains(&PlayerEvent::EndOfStream), "{events:?}");
+}
+
+#[test]
+fn a_late_first_position_read_after_a_load_or_seek_still_moves_on() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("late.wav");
+    write_test_wav(&wav, 3.0);
+    let mut player = Player::new_for_tests().unwrap();
+    player.play(&wav).unwrap();
+    // 以前装载后第一次读位置晚于 100ms，位置就一直停在 0:00。
+    sleep(Duration::from_millis(300));
+    let position = player.position();
+    assert!(
+        position >= Duration::from_millis(150) && position < Duration::from_millis(700),
+        "播放 300ms 后位置是 {position:?}"
+    );
+
+    assert!(player.seek_to(Duration::from_millis(1000)));
+    sleep(Duration::from_millis(300));
+    let position = player.position();
+    assert!(
+        position >= Duration::from_millis(1150) && position < Duration::from_millis(1700),
+        "跳到 1s 再播 300ms 后位置是 {position:?}"
+    );
+    sleep(Duration::from_millis(200));
+    assert!(player.position() > position, "位置停住不动了");
 }
 
 #[test]
