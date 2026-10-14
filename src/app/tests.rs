@@ -2994,3 +2994,70 @@ fn seeking_past_the_end_of_a_repeated_recording_starts_a_fresh_playthrough() {
         Some(crate::progress::Listened::InProgress(AT_12_34))
     );
 }
+
+/// 把一份旧数据复制到新目录、启动 App 并完成第一次扫描，返回底栏的提示。
+fn first_start_after_the_rename(corrupt_progress: bool, corrupt_playlist: bool) -> String {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let music = root.join("music");
+    let old_data = root.join("data/tui-music-player");
+    std::fs::create_dir_all(root.join("config/tui-music-player")).unwrap();
+    std::fs::write(root.join("config/tui-music-player/config.kdl"), "").unwrap();
+    std::fs::create_dir_all(old_data.join("playlists")).unwrap();
+    if corrupt_progress {
+        std::fs::write(old_data.join("progress.json"), "{ not json").unwrap();
+    }
+    if corrupt_playlist {
+        std::fs::write(old_data.join("playlists/night.json"), "{ not json").unwrap();
+    }
+    let paths = AppPaths::from_roots(
+        root.join("config"),
+        root.join("data"),
+        root.join("cache"),
+        Some(music.clone()),
+    );
+    let adopted = crate::config::adopt_previous_dirs(&paths).unwrap();
+    let mut app = App::with_player(
+        Box::new(FakeBackend::new().0),
+        music.clone(),
+        paths,
+        AppConfig::default(),
+        adopted,
+        false,
+    )
+    .unwrap();
+    app.apply_scan_finished(vec![track(music.join("a.wav"))], Vec::new());
+    app.view.message.clone().unwrap_or_default()
+}
+
+#[test]
+fn copied_data_that_cannot_be_loaded_is_reported_before_the_copy_note() {
+    let copied = "已把 tui-music-player 目录里的设置和播放记录复制到新目录";
+    for (progress, playlist) in [(true, false), (false, true), (true, true)] {
+        let message = first_start_after_the_rename(progress, playlist);
+        let note = message.find(copied).unwrap_or_else(|| panic!("{message}"));
+        if progress {
+            let error = message
+                .find("收听进度")
+                .unwrap_or_else(|| panic!("{message}"));
+            assert!(error < note, "{message}");
+        }
+        if playlist {
+            let error = message
+                .find("播放列表")
+                .unwrap_or_else(|| panic!("{message}"));
+            assert!(error < note, "{message}");
+        }
+    }
+    // 数据都读得了时只有复制的说明。
+    assert!(first_start_after_the_rename(false, false).starts_with(copied));
+}
+
+#[test]
+fn startup_notes_are_joined_in_order_and_skip_missing_ones() {
+    assert_eq!(super::join_notes([None, None]), None);
+    assert_eq!(
+        super::join_notes([Some("甲".to_owned()), None, Some("乙".to_owned())]),
+        Some("甲；乙".to_owned())
+    );
+}

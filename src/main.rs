@@ -12,7 +12,7 @@ use crossterm::terminal::{
 };
 use ratatui::prelude::*;
 
-use nemuri::app::App;
+use nemuri::app::{App, join_notes};
 use nemuri::cli::{Cli, validate_directory};
 use nemuri::config::{self, AppConfig, AppPaths, LoadedConfig};
 use nemuri::media::{MediaEvent, MediaSession};
@@ -34,21 +34,17 @@ fn run_application() -> Result<(), String> {
     let adopted = config::adopt_previous_dirs(&paths)?;
     let LoadedConfig {
         mut config,
-        message: warning,
+        message: config_warning,
         writable,
     } = AppConfig::load(&paths)
         .map_err(|error| format!("无法读取配置 {}: {error}", paths.config_file.display()))?;
-    // 复制了旧目录时先说这件事；配置本身有问题的提示接在后面，不被盖掉。
-    let mut warning = match (adopted, warning) {
-        (Some(adopted), Some(warning)) => Some(format!("{adopted}；{warning}")),
-        (adopted, warning) => adopted.or(warning),
-    };
 
+    let mut library_note = None;
     let library_dir = if let Some(path) = cli.set_library {
         let path = validate_directory(&path).map_err(|error| error.to_string())?;
         config::set_library(&paths.config_file, &path)?;
         config.library_dir = Some(path.clone());
-        warning = Some(format!("主音乐库已设置为 {}", path.display()));
+        library_note = Some(format!("主音乐库已设置为 {}", path.display()));
         path
     } else if let Some(path) = cli.directory {
         validate_directory(&path).map_err(|error| error.to_string())?
@@ -64,6 +60,9 @@ fn run_application() -> Result<(), String> {
             format!("默认 Music 目录不可用: {error}。请使用 --set-library PATH 设置主音乐库")
         })?
     };
+
+    // 配置写错的提示在前，复制旧目录的说明在最后，谁也不把谁挤掉。
+    let warning = join_notes([config_warning, library_note, adopted]);
 
     // 播放器、播放列表目录及工作线程都在切换终端模式前初始化。
     // 这样启动失败时错误仍是普通、可复制的终端文本。
