@@ -120,7 +120,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut ViewLayout) {
                     Block::bordered()
                         .border_style(Style::new().fg(theme.border))
                         .title(Span::styled(
-                            " Music Player ",
+                            " Nemuri ",
                             Style::new().fg(theme.primary).bold(),
                         )),
                 ),

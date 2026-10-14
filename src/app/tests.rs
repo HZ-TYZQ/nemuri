@@ -2443,6 +2443,16 @@ fn privacy_mode_without_a_track_reports_no_title() {
 }
 
 #[test]
+fn the_interface_is_titled_nemuri() {
+    let (_temp, app) = test_app(AppConfig::default());
+    let (_, backend) = render(&app, 100, 24);
+    assert!(screen_rows(&backend)[0].contains("♪Nemuri"));
+    // 终端太小时的提示框也用这个名字。
+    let (_, backend) = render(&app, 40, 10);
+    assert!(screen_rows(&backend)[0].contains("Nemuri"));
+}
+
+#[test]
 fn the_now_playing_bar_marks_privacy_mode() {
     let (_temp, app) = test_app(AppConfig {
         privacy: true,

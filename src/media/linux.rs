@@ -87,7 +87,7 @@ impl RootInterface for Bridge {
     }
 
     async fn identity(&self) -> fdo::Result<String> {
-        Ok("Music Player".to_owned())
+        Ok("Nemuri".to_owned())
     }
 
     async fn desktop_entry(&self) -> fdo::Result<String> {
@@ -253,8 +253,8 @@ pub fn run(
             commands,
             snapshot: Arc::clone(&snapshot),
         };
-        let instance = format!("music_player.instance{}", std::process::id());
-        let server = match Server::new("music_player", bridge.clone()).await {
+        let instance = format!("nemuri.instance{}", std::process::id());
+        let server = match Server::new("nemuri", bridge.clone()).await {
             Ok(server) => server,
             Err(_) => match Server::new(&instance, bridge).await {
                 Ok(server) => server,

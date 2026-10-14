@@ -1,7 +1,7 @@
 Name:           nemuri
 Version:        1.4.0
 Release:        1%{?dist}
-Summary:        Terminal music library player
+Summary:        Terminal player for ASMR and music
 
 License:        MIT AND Apache-2.0 AND MPL-2.0 AND BSD-3-Clause
 URL:            https://github.com/HZ-TYZQ/nemuri
@@ -21,10 +21,11 @@ Provides:       music-player = %{version}-%{release}
 Obsoletes:      music-player < %{version}-%{release}
 
 %description
-Music Player provides a responsive terminal interface for a local music
-library. It uses Rodio for playback, Lofty for metadata, SQLite for an
-incremental index that can be rebuilt, and XDG directories for settings
-and playlists. On Linux it exposes MPRIS 2 for desktop media controls.
+Nemuri is a terminal player for long ASMR recordings and ordinary music
+from a local library. It uses Rodio for playback, Lofty for metadata,
+SQLite for an incremental index that can be rebuilt, and XDG directories
+for settings and playlists. On Linux it exposes MPRIS 2 for desktop media
+controls.
 
 %prep
 %autosetup -n %{name}-%{version}

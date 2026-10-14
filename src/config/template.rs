@@ -10,7 +10,7 @@ pub(super) fn render(config: &AppConfig) -> String {
     };
     let flag = |value: bool| if value { "#true" } else { "#false" };
     format!(
-        r##"// Music Player 配置文件，使用 KDL v2 格式（https://kdl.dev）。
+        r##"// Nemuri 配置文件，使用 KDL v2 格式（https://kdl.dev）。
 //
 // 改完重启播放器生效。运行中用按键改过的设置（音量、静音、循环、随机、
 // 排序和各个开关）会在退出时写回这里，只改动那几项，其余内容和注释原样保留。

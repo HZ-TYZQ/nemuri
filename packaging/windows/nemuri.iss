@@ -10,14 +10,14 @@
 
 [Setup]
 AppId={{80F98D61-E5DA-4C99-9361-B5265C53FE31}
-AppName=Music Player
+AppName=Nemuri
 AppVersion={#AppVersion}
 AppPublisher=HZ-TYZQ
-AppPublisherURL=https://github.com/HZ-TYZQ/tui-music-player
-AppSupportURL=https://github.com/HZ-TYZQ/tui-music-player/issues
-AppUpdatesURL=https://github.com/HZ-TYZQ/tui-music-player/releases
-DefaultDirName={localappdata}\Programs\Music Player
-DefaultGroupName=Music Player
+AppPublisherURL=https://github.com/HZ-TYZQ/nemuri
+AppSupportURL=https://github.com/HZ-TYZQ/nemuri/issues
+AppUpdatesURL=https://github.com/HZ-TYZQ/nemuri/releases
+DefaultDirName={localappdata}\Programs\Nemuri
+DefaultGroupName=Nemuri
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
@@ -44,8 +44,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 
 [CustomMessages]
-english.AddToPath=Add Music Player to the current user PATH
-chinesesimplified.AddToPath=将 Music Player 添加到当前用户 PATH
+english.AddToPath=Add Nemuri to the current user PATH
+chinesesimplified.AddToPath=将 Nemuri 添加到当前用户 PATH
 
 [Tasks]
 Name: "addtopath"; Description: "{cm:AddToPath}"; Flags: unchecked
@@ -54,7 +54,7 @@ Name: "addtopath"; Description: "{cm:AddToPath}"; Flags: unchecked
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Music Player"; Filename: "{app}\nemuri.exe"; WorkingDir: "{app}"; IconFilename: "{app}\nemuri.ico"
+Name: "{autoprograms}\Nemuri"; Filename: "{app}\nemuri.exe"; WorkingDir: "{app}"; IconFilename: "{app}\nemuri.ico"
 
 [Code]
 function NormalizePath(Value: String): String;

@@ -297,7 +297,7 @@ fn timespan_to_duration(span: TimeSpan) -> Duration {
 }
 
 unsafe fn create_hidden_window() -> Result<HWND, String> {
-    let class_name = w!("music-player-smtc");
+    let class_name = w!("nemuri-smtc");
     let instance = unsafe { GetModuleHandleW(None) }
         .map_err(|error| format!("GetModuleHandleW 失败: {error}"))?;
     let class = WNDCLASSEXW {

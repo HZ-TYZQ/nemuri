@@ -1,17 +1,16 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=Music Player
-Name[zh_CN]=音乐播放器
-GenericName=Terminal Music Player
-GenericName[zh_CN]=终端音乐播放器
-Comment=Play and manage a local music library in the terminal
-Comment[zh_CN]=在终端中播放和管理本地音乐库
+Name=Nemuri
+GenericName=Terminal ASMR Player
+GenericName[zh_CN]=终端 ASMR 播放器
+Comment=Play ASMR recordings and music from a local library in the terminal
+Comment[zh_CN]=在终端中播放本地的 ASMR 录音和音乐
 TryExec=nemuri
 Exec=nemuri
 Icon=nemuri
 Terminal=true
 Categories=AudioVideo;Audio;Player;
-Keywords=Music;Player;Audio;Terminal;TUI;
-Keywords[zh_CN]=音乐;播放器;音频;终端;
+Keywords=ASMR;Sleep;Music;Player;Audio;Terminal;TUI;
+Keywords[zh_CN]=ASMR;眠;睡眠;音乐;播放器;音频;终端;
 StartupNotify=false
