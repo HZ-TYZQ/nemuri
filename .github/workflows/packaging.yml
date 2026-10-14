@@ -77,11 +77,23 @@ jobs:
           -ExePath "$env:GITHUB_WORKSPACE\target\release\nemuri.exe"
           -Version "${{ steps.version.outputs.version }}"
           -OutputDir "$env:RUNNER_TEMP\windows-dist"
+      # Before the rename the player was released as music-player; check that
+      # its last installer is upgraded in place.
+      - name: Download the 1.4.0 installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release download v1.4.0
+          --repo "${{ github.repository }}"
+          --pattern "music-player-1.4.0-windows-x86_64-setup.exe"
+          --dir "$env:RUNNER_TEMP\previous"
       - name: Test Installer behavior
         shell: pwsh
         run: >-
           ./packaging/windows/test-installer.ps1
           -SetupPath "$env:RUNNER_TEMP\windows-dist\nemuri-${{ steps.version.outputs.version }}-windows-x86_64-setup.exe"
+          -PreviousSetupPath "$env:RUNNER_TEMP\previous\music-player-1.4.0-windows-x86_64-setup.exe"
       - name: Retain packages for diagnosis
         if: always()
         uses: actions/upload-artifact@v7

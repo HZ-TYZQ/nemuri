@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [string] $SetupPath
+    [string] $SetupPath,
+    # Setup of the last Music Player release (1.4.0); when given, also test
+    # upgrading that install in place.
+    [string] $PreviousSetupPath
 )
 
 Set-StrictMode -Version Latest
@@ -46,9 +49,12 @@ function Invoke-Setup([string] $Installer, [string] $Directory, [switch] $AddToP
         "/CURRENTUSER",
         "/VERYSILENT",
         "/SUPPRESSMSGBOXES",
-        "/NORESTART",
-        "/DIR=`"$Directory`""
+        "/NORESTART"
     )
+    # Without a directory, an upgrade must reuse the previous install folder.
+    if ($Directory) {
+        $arguments += "/DIR=`"$Directory`""
+    }
     if ($AddToPath) {
         $arguments += "/TASKS=addtopath"
     }
@@ -137,3 +143,53 @@ if (Test-PathEntry (Get-UserPath) $installDir) {
 }
 
 Write-Host "Installer default and optional PATH behavior passed"
+
+if ($PreviousSetupPath) {
+    $previous = [System.IO.Path]::GetFullPath($PreviousSetupPath)
+    $upgradeDir = Join-Path $temporaryRoot "nemuri-upgrade-test"
+    $startMenu = [Environment]::GetFolderPath("Programs")
+    $oldShortcut = Join-Path $startMenu "Music Player.lnk"
+    $newShortcut = Join-Path $startMenu "Nemuri.lnk"
+    $pathBefore = Get-UserPath
+
+    Invoke-Setup -Installer $previous -Directory $upgradeDir -AddToPath
+    foreach ($required in @((Join-Path $upgradeDir "music-player.exe"), $oldShortcut)) {
+        if (-not (Test-Path -LiteralPath $required)) {
+            throw "The previous release did not install $required"
+        }
+    }
+
+    Invoke-Setup -Installer $setup
+    foreach ($stale in @(
+        (Join-Path $upgradeDir "music-player.exe"),
+        (Join-Path $upgradeDir "music-player.cmd"),
+        (Join-Path $upgradeDir "music-player.ico"),
+        $oldShortcut
+    )) {
+        if (Test-Path -LiteralPath $stale) {
+            throw "The upgrade left a file with the old name behind: $stale"
+        }
+    }
+    if (-not (Test-Path -LiteralPath $newShortcut)) {
+        throw "The upgrade did not create the Start menu entry $newShortcut"
+    }
+    if (-not (Test-PathEntry (Get-UserPath) $upgradeDir)) {
+        throw "The upgrade lost the PATH entry of the previous install"
+    }
+    Test-LicenseMaterial -Directory $upgradeDir
+    & (Join-Path $upgradeDir "nemuri.cmd") --version
+    if ($LASTEXITCODE -ne 0) {
+        throw "Upgraded installation launcher failed"
+    }
+
+    Invoke-Uninstall -Directory $upgradeDir
+    if (Test-PathEntry (Get-UserPath) $upgradeDir) {
+        throw "Uninstalling the upgraded install did not remove its PATH entry"
+    }
+    if (Test-Path -LiteralPath $newShortcut) {
+        throw "Uninstalling the upgraded install left its Start menu entry"
+    }
+    Set-UserPath $pathBefore
+
+    Write-Host "Upgrade from the previous release passed"
+}

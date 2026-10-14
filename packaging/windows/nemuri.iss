@@ -53,10 +53,24 @@ Name: "addtopath"; Description: "{cm:AddToPath}"; Flags: unchecked
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; 1.4.0 and earlier were installed as Music Player under the same AppId.
+; Upgrading in place keeps the old install folder (UsePreviousAppDir), so the
+; files and the Start menu entry with the old names have to be removed here.
+[InstallDelete]
+Type: files; Name: "{app}\music-player.exe"
+Type: files; Name: "{app}\music-player.cmd"
+Type: files; Name: "{app}\music-player.ico"
+Type: files; Name: "{autoprograms}\Music Player.lnk"
+
 [Icons]
 Name: "{autoprograms}\Nemuri"; Filename: "{app}\nemuri.exe"; WorkingDir: "{app}"; IconFilename: "{app}\nemuri.ico"
 
 [Code]
+const
+  // Keeps the name from before the rename: an install upgraded from 1.4.0
+  // recorded its PATH flag here, and its uninstaller must still find it.
+  PathFlagKey = 'Software\HZ-TYZQ\Music Player';
+
 function NormalizePath(Value: String): String;
 begin
   Result := Lowercase(Trim(Value));
@@ -159,7 +173,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if (CurStep = ssPostInstall) and WizardIsTaskSelected('addtopath') and
      AddToUserPath(ExpandConstant('{app}')) then
-    RegWriteDWordValue(HKCU, 'Software\HZ-TYZQ\Music Player',
+    RegWriteDWordValue(HKCU, PathFlagKey,
       'PathAddedByInstaller', 1);
 end;
 
@@ -168,14 +182,14 @@ var
   PathAddedByInstaller: Cardinal;
 begin
   if (CurUninstallStep = usUninstall) and
-     RegQueryDWordValue(HKCU, 'Software\HZ-TYZQ\Music Player',
+     RegQueryDWordValue(HKCU, PathFlagKey,
        'PathAddedByInstaller', PathAddedByInstaller) and
      (PathAddedByInstaller = 1) then
   begin
     RemoveFromUserPath(ExpandConstant('{app}'));
-    RegDeleteValue(HKCU, 'Software\HZ-TYZQ\Music Player',
+    RegDeleteValue(HKCU, PathFlagKey,
       'PathAddedByInstaller');
-    RegDeleteKeyIfEmpty(HKCU, 'Software\HZ-TYZQ\Music Player');
+    RegDeleteKeyIfEmpty(HKCU, PathFlagKey);
     RegDeleteKeyIfEmpty(HKCU, 'Software\HZ-TYZQ');
   end;
 end;

@@ -9,6 +9,7 @@
 - 程序改名为 Nemuri（眠り，睡眠）：命令从 `music-player` 改为 `nemuri`，软件包、man 手册（`man nemuri`）、桌面菜单项和图标文件随之改名。新的 RPM 包会替换旧的 `music-player` 包；Windows 发行包改为 `nemuri-<版本>-windows-x86_64-setup.exe` 和 `…-portable.zip`
 - 设置和用户数据改放在 `nemuri` 目录：Linux 为 `~/.config/nemuri`、`~/.local/share/nemuri` 和 `~/.cache/nemuri`，Windows 为 `%APPDATA%\nemuri` 和 `%LOCALAPPDATA%\nemuri`。第一次启动时，新目录还不存在就把原来 `tui-music-player` 目录里的配置、播放列表、会话和收听进度复制过来，底栏说明一句；旧目录原样保留，退回旧版本时一切照旧，确认无误后可以自己删除。缓存不复制，第一次扫描会重建。复制失败时不启动，并说明原因，以免设置和播放记录分成两份
 - 界面标题、系统媒体控制（MPRIS 的名称为 Nemuri，总线名改为 `org.mpris.MediaPlayer2.nemuri`；Windows 的 SMTC）、桌面菜单项、Windows 安装程序和配置文件开头的说明都改用 Nemuri。桌面菜单里可以搜索“Nemuri”“ASMR”或“睡眠”找到它
+- Windows 安装程序会原地升级已经装好的 Music Player：沿用原来的安装目录和 PATH 设置，删掉旧名字的程序文件和开始菜单项，卸载时照常移除它添加的 PATH 条目
 
 ### 曲库
 
