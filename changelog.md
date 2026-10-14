@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 改名
+
+- 程序改名为 Nemuri（眠り，睡眠）：命令从 `music-player` 改为 `nemuri`，软件包、man 手册（`man nemuri`）、桌面菜单项和图标文件随之改名。新的 RPM 包会替换旧的 `music-player` 包；Windows 发行包改为 `nemuri-<版本>-windows-x86_64-setup.exe` 和 `…-portable.zip`
+
 ### 曲库
 
 - 曲库、正在播放、队列和系统媒体控制改为显示磁盘上的文件名（不含扩展名），原样显示，不再使用标签标题：下载来的录音常带无意义的标签标题，写在文件名里的备注也只有文件名里有。文件改名后，下次扫描（启动或按 `r`）即显示新名字

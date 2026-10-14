@@ -24,11 +24,11 @@ PrivilegesRequiredOverridesAllowed=commandline
 ArchitecturesAllowed=x64compatible and not arm64
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.22000
-SetupIconFile=..\..\assets\icons\music-player.ico
-UninstallDisplayIcon={app}\music-player.ico
+SetupIconFile=..\..\assets\icons\nemuri.ico
+UninstallDisplayIcon={app}\nemuri.ico
 LicenseFile=..\..\LICENSE
 OutputDir={#OutputDir}
-OutputBaseFilename=music-player-{#AppVersion}-windows-x86_64-setup
+OutputBaseFilename=nemuri-{#AppVersion}-windows-x86_64-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -54,7 +54,7 @@ Name: "addtopath"; Description: "{cm:AddToPath}"; Flags: unchecked
 Source: "{#StageDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Music Player"; Filename: "{app}\music-player.exe"; WorkingDir: "{app}"; IconFilename: "{app}\music-player.ico"
+Name: "{autoprograms}\Music Player"; Filename: "{app}\nemuri.exe"; WorkingDir: "{app}"; IconFilename: "{app}\nemuri.ico"
 
 [Code]
 function NormalizePath(Value: String): String;

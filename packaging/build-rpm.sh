@@ -2,7 +2,7 @@
 set -euo pipefail
 
 project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-package_name=music-player
+package_name=nemuri
 spec_file="$project_dir/packaging/$package_name.spec"
 topdir="$project_dir/packaging/rpmbuild"
 
@@ -43,9 +43,9 @@ tar -C "$project_dir" \
     assets \
     src \
     tests \
-    packaging/music-player.1 \
-    packaging/music-player.desktop \
-    packaging/music-player.spec \
+    packaging/nemuri.1 \
+    packaging/nemuri.desktop \
+    packaging/nemuri.spec \
     packaging/build-rpm.sh \
     packaging/licenses \
     | tar -C "$work_dir/$source_name" -xf -

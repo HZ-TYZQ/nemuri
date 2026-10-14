@@ -44,7 +44,7 @@ jobs:
         shell: bash
         run: |
           cargo_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
-          spec_version=$(sed -n 's/^Version:[[:space:]]*//p' packaging/music-player.spec | head -n 1)
+          spec_version=$(sed -n 's/^Version:[[:space:]]*//p' packaging/nemuri.spec | head -n 1)
           tag_version=${{ steps.release.outputs.tag }}
           tag_version=${tag_version#v}
           if [[ -z "$cargo_version" || "$cargo_version" != "$spec_version" || "$cargo_version" != "$tag_version" ]]; then
@@ -95,7 +95,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: windows-binary
-          path: target/release/music-player.exe
+          path: target/release/nemuri.exe
           if-no-files-found: error
 
   windows-package:
@@ -120,14 +120,14 @@ jobs:
         run: >-
           ./packaging/windows/package-windows.ps1
           -ProjectDir "$env:GITHUB_WORKSPACE"
-          -MusicPlayerExe "$env:GITHUB_WORKSPACE\windows-binary\music-player.exe"
+          -ExePath "$env:GITHUB_WORKSPACE\windows-binary\nemuri.exe"
           -Version "${{ needs.metadata.outputs.version }}"
           -OutputDir "$env:RUNNER_TEMP\windows-dist"
       - name: Test Installer behavior
         shell: pwsh
         run: >-
           ./packaging/windows/test-installer.ps1
-          -SetupPath "$env:RUNNER_TEMP\windows-dist\music-player-${{ needs.metadata.outputs.version }}-windows-x86_64-setup.exe"
+          -SetupPath "$env:RUNNER_TEMP\windows-dist\nemuri-${{ needs.metadata.outputs.version }}-windows-x86_64-setup.exe"
       - uses: actions/upload-artifact@v7
         with:
           name: windows-packages

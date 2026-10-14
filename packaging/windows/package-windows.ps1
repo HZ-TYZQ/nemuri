@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)] [string] $ProjectDir,
-    [Parameter(Mandatory = $true)] [string] $MusicPlayerExe,
+    [Parameter(Mandatory = $true)] [string] $ExePath,
     [Parameter(Mandatory = $true)] [string] $Version,
     [Parameter(Mandatory = $true)] [string] $OutputDir
 )
@@ -10,10 +10,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $project = [System.IO.Path]::GetFullPath($ProjectDir)
-$executable = [System.IO.Path]::GetFullPath($MusicPlayerExe)
+$executable = [System.IO.Path]::GetFullPath($ExePath)
 $output = [System.IO.Path]::GetFullPath($OutputDir)
 $temporaryRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
-$packageName = "music-player-$Version-windows-x86_64"
+$packageName = "nemuri-$Version-windows-x86_64"
 $stageRoot = Join-Path $temporaryRoot $packageName
 $licenseDir = Join-Path $project "packaging\licenses"
 $notices = Join-Path $licenseDir "THIRD-PARTY-NOTICES.txt"
@@ -22,7 +22,7 @@ $apacheLicense = Join-Path $licenseDir "Apache-2.0.txt"
 
 foreach ($required in @(
     $executable,
-    (Join-Path $project "assets\icons\music-player.ico"),
+    (Join-Path $project "assets\icons\nemuri.ico"),
     (Join-Path $project "packaging\windows\ChineseSimplified.isl"),
     $notices,
     $mplLicense,
@@ -38,11 +38,11 @@ if (Test-Path -LiteralPath $stageRoot) {
 }
 New-Item -ItemType Directory -Force -Path $stageRoot | Out-Null
 
-Copy-Item -LiteralPath $executable -Destination (Join-Path $stageRoot "music-player.exe") -Force
-Copy-Item -LiteralPath (Join-Path $project "packaging\windows\music-player.cmd") -Destination $stageRoot
+Copy-Item -LiteralPath $executable -Destination (Join-Path $stageRoot "nemuri.exe") -Force
+Copy-Item -LiteralPath (Join-Path $project "packaging\windows\nemuri.cmd") -Destination $stageRoot
 Copy-Item -LiteralPath (Join-Path $project "packaging\windows\README-Windows.txt") -Destination $stageRoot
 Copy-Item -LiteralPath $notices -Destination $stageRoot
-Copy-Item -LiteralPath (Join-Path $project "assets\icons\music-player.ico") -Destination $stageRoot
+Copy-Item -LiteralPath (Join-Path $project "assets\icons\nemuri.ico") -Destination $stageRoot
 Copy-Item -LiteralPath (Join-Path $project "LICENSE") -Destination $stageRoot
 
 $stageLicenses = Join-Path $stageRoot "third-party-licenses"
@@ -51,7 +51,7 @@ Copy-Item -LiteralPath $mplLicense -Destination $stageLicenses
 Copy-Item -LiteralPath $apacheLicense -Destination $stageLicenses
 
 foreach ($required in @(
-    (Join-Path $stageRoot "music-player.exe"),
+    (Join-Path $stageRoot "nemuri.exe"),
     (Join-Path $stageRoot "LICENSE"),
     (Join-Path $stageRoot "THIRD-PARTY-NOTICES.txt"),
     (Join-Path $stageLicenses "MPL-2.0.txt"),
@@ -65,9 +65,9 @@ foreach ($required in @(
 $oldPath = $env:PATH
 try {
     $env:PATH = "$stageRoot;$oldPath"
-    & (Join-Path $stageRoot "music-player.cmd") --version
+    & (Join-Path $stageRoot "nemuri.cmd") --version
     if ($LASTEXITCODE -ne 0) {
-        throw "Packaged music-player launcher failed with exit code $LASTEXITCODE"
+        throw "Packaged nemuri launcher failed with exit code $LASTEXITCODE"
     }
 }
 finally {
@@ -92,7 +92,7 @@ if (-not $iscc) {
     }
 }
 
-$installerScript = Join-Path $project "packaging\windows\music-player.iss"
+$installerScript = Join-Path $project "packaging\windows\nemuri.iss"
 & $iscc "/DAppVersion=$Version" "/DStageDir=$stageRoot" "/DOutputDir=$output" $installerScript
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compiler exited with code $LASTEXITCODE"

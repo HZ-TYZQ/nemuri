@@ -91,7 +91,7 @@ impl RootInterface for Bridge {
     }
 
     async fn desktop_entry(&self) -> fdo::Result<String> {
-        Ok("music-player".to_owned())
+        Ok("nemuri".to_owned())
     }
 
     async fn supported_uri_schemes(&self) -> fdo::Result<Vec<String>> {

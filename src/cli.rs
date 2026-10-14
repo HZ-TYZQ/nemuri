@@ -56,7 +56,7 @@ mod tests {
 
     #[test]
     fn positional_directory_and_set_library_conflict() {
-        let result = Cli::try_parse_from(["music-player", "/tmp", "--set-library", "/tmp"]);
+        let result = Cli::try_parse_from(["nemuri", "/tmp", "--set-library", "/tmp"]);
         assert!(result.is_err());
     }
 

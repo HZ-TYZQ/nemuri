@@ -12,17 +12,17 @@ use crossterm::terminal::{
 };
 use ratatui::prelude::*;
 
-use music_player::app::App;
-use music_player::cli::{Cli, validate_directory};
-use music_player::config::{self, AppConfig, AppPaths, LoadedConfig};
-use music_player::media::{MediaEvent, MediaSession};
-use music_player::ui::{self, MouseInput, ViewLayout};
+use nemuri::app::App;
+use nemuri::cli::{Cli, validate_directory};
+use nemuri::config::{self, AppConfig, AppPaths, LoadedConfig};
+use nemuri::media::{MediaEvent, MediaSession};
+use nemuri::ui::{self, MouseInput, ViewLayout};
 
 fn main() -> ExitCode {
     match run_application() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("music-player: {error}");
+            eprintln!("nemuri: {error}");
             ExitCode::FAILURE
         }
     }
@@ -77,10 +77,10 @@ fn run_application() -> Result<(), String> {
     let save_result = app.save_settings();
     // 会话和收听进度只是便利功能，保存失败不应让整个程序以失败退出。
     if let Err(error) = app.save_session() {
-        eprintln!("music-player: {error}");
+        eprintln!("nemuri: {error}");
     }
     if let Err(error) = app.save_progress() {
-        eprintln!("music-player: {error}");
+        eprintln!("nemuri: {error}");
     }
 
     run_result?;

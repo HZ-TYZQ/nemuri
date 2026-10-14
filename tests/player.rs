@@ -6,7 +6,7 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use music_player::player::{ChannelMix, PlayState, PlaybackBackend, Player, PlayerEvent};
+use nemuri::player::{ChannelMix, PlayState, PlaybackBackend, Player, PlayerEvent};
 
 fn write_test_wav(path: &Path, duration_secs: f32) {
     let sample_rate = 8_000u32;

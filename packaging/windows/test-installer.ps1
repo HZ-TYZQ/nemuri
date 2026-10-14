@@ -65,7 +65,7 @@ function Invoke-Uninstall([string] $Directory) {
         throw "Uninstaller was not found in $Directory"
     }
     $temporaryRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
-    $logFile = Join-Path $temporaryRoot "music-player-uninstall.log"
+    $logFile = Join-Path $temporaryRoot "nemuri-uninstall.log"
     if (Test-Path -LiteralPath $logFile) {
         Remove-Item -LiteralPath $logFile -Force
     }
@@ -92,7 +92,7 @@ function Invoke-Uninstall([string] $Directory) {
 
 $setup = [System.IO.Path]::GetFullPath($SetupPath)
 $temporaryRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
-$installDir = Join-Path $temporaryRoot "music-player-installer-test"
+$installDir = Join-Path $temporaryRoot "nemuri-installer-test"
 $pathBefore = Get-UserPath
 
 Invoke-Setup -Installer $setup -Directory $installDir
@@ -100,7 +100,7 @@ if ((Get-UserPath) -ne $pathBefore) {
     throw "The default installation unexpectedly changed the user PATH"
 }
 Test-LicenseMaterial -Directory $installDir
-& (Join-Path $installDir "music-player.cmd") --version
+& (Join-Path $installDir "nemuri.cmd") --version
 if ($LASTEXITCODE -ne 0) {
     throw "Default installation launcher failed"
 }
@@ -127,7 +127,7 @@ if (-not (Test-PathEntry (Get-UserPath) $installDir)) {
     throw "The add-to-PATH task did not add the installation directory"
 }
 Test-LicenseMaterial -Directory $installDir
-& (Join-Path $installDir "music-player.cmd") --version
+& (Join-Path $installDir "nemuri.cmd") --version
 if ($LASTEXITCODE -ne 0) {
     throw "PATH-enabled installation launcher failed"
 }

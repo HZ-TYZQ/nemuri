@@ -14,7 +14,7 @@ on:
       - LICENSE
       - assets/**
       - packaging/**
-      - '!packaging/music-player.1'
+      - '!packaging/nemuri.1'
       - .github/workflows/packaging.yml
   pull_request:
     paths:
@@ -23,7 +23,7 @@ on:
       - LICENSE
       - assets/**
       - packaging/**
-      - '!packaging/music-player.1'
+      - '!packaging/nemuri.1'
       - .github/workflows/packaging.yml
   workflow_dispatch:
 
@@ -74,14 +74,14 @@ jobs:
         run: >-
           ./packaging/windows/package-windows.ps1
           -ProjectDir "$env:GITHUB_WORKSPACE"
-          -MusicPlayerExe "$env:GITHUB_WORKSPACE\target\release\music-player.exe"
+          -ExePath "$env:GITHUB_WORKSPACE\target\release\nemuri.exe"
           -Version "${{ steps.version.outputs.version }}"
           -OutputDir "$env:RUNNER_TEMP\windows-dist"
       - name: Test Installer behavior
         shell: pwsh
         run: >-
           ./packaging/windows/test-installer.ps1
-          -SetupPath "$env:RUNNER_TEMP\windows-dist\music-player-${{ steps.version.outputs.version }}-windows-x86_64-setup.exe"
+          -SetupPath "$env:RUNNER_TEMP\windows-dist\nemuri-${{ steps.version.outputs.version }}-windows-x86_64-setup.exe"
       - name: Retain packages for diagnosis
         if: always()
         uses: actions/upload-artifact@v7

@@ -1,10 +1,10 @@
-Name:           music-player
+Name:           nemuri
 Version:        1.4.0
 Release:        1%{?dist}
 Summary:        Terminal music library player
 
 License:        MIT AND Apache-2.0 AND MPL-2.0 AND BSD-3-Clause
-URL:            https://github.com/HZ-TYZQ/tui-music-player
+URL:            https://github.com/HZ-TYZQ/nemuri
 Source0:        %{name}-%{version}.tar.gz
 Source1:        %{name}-%{version}-vendor.tar.gz
 
@@ -15,6 +15,10 @@ BuildRequires:  pkgconfig(alsa)
 BuildRequires:  pkgconfig(sqlite3)
 
 ExclusiveArch:  x86_64
+
+# 1.4.0 及以前叫 music-player；版本高于它时直接替换旧包。
+Provides:       music-player = %{version}-%{release}
+Obsoletes:      music-player < %{version}-%{release}
 
 %description
 Music Player provides a responsive terminal interface for a local music
