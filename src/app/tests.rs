@@ -3058,6 +3058,71 @@ fn startup_notes_are_joined_in_order_and_skip_missing_ones() {
     assert_eq!(super::join_notes([None, None]), None);
     assert_eq!(
         super::join_notes([Some("甲".to_owned()), None, Some("乙".to_owned())]),
-        Some("甲；乙".to_owned())
+        Some("甲\n乙".to_owned())
     );
+}
+
+#[test]
+fn several_startup_notes_all_show_on_screen() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let music = root.join("music");
+    let old_data = root.join("data/tui-music-player");
+    std::fs::create_dir_all(root.join("config/tui-music-player")).unwrap();
+    std::fs::write(root.join("config/tui-music-player/config.kdl"), "").unwrap();
+    std::fs::create_dir_all(old_data.join("playlists")).unwrap();
+    std::fs::write(old_data.join("progress.json"), "{ not json").unwrap();
+    std::fs::write(old_data.join("playlists/night.json"), "{ not json").unwrap();
+    let paths = AppPaths::from_roots(
+        root.join("config"),
+        root.join("data"),
+        root.join("cache"),
+        Some(music.clone()),
+    );
+    let adopted = crate::config::adopt_previous_dirs(&paths).unwrap();
+    let mut app = App::with_player(
+        Box::new(FakeBackend::new().0),
+        music.clone(),
+        paths,
+        AppConfig::default(),
+        adopted,
+        false,
+    )
+    .unwrap();
+    app.apply_scan_finished(vec![track(music.join("a.wav"))], Vec::new());
+
+    // 三条提示各自折行显示在底栏，常见的 80 和 100 列都看得全。
+    for (width, height) in [(100, 30), (80, 24)] {
+        let (_, backend) = render(&app, width, height);
+        let screen = screen_rows(&backend).join("");
+        for expected in ["无法读取", "从空记录开始", "确认无误后可以删除"] {
+            assert!(
+                screen.contains(expected),
+                "{width}×{height} 缺少“{expected}”：\n{screen}"
+            );
+        }
+    }
+
+    // 下一条提示出现后，底栏恢复成一行。
+    press(&mut app, key(KeyCode::Char('m')));
+    let (_, backend) = render(&app, 80, 24);
+    let rows = screen_rows(&backend);
+    assert_eq!(rows[23], "•已静音");
+    assert!(rows[22].starts_with('╰'), "{}", rows[22]);
+}
+
+#[test]
+fn a_footer_that_would_take_more_than_a_third_of_the_screen_ends_in_an_ellipsis() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.view.message = Some(vec!["很长的一条提示".repeat(20); 6].join("\n"));
+    let (_, backend) = render(&app, 60, 24);
+    let rows = screen_rows(&backend);
+    // 24 行的三分之一是 8 行：前面照常折行，最后一行以省略号结尾。
+    let footer: Vec<&String> = rows
+        .iter()
+        .rev()
+        .take_while(|row| !row.starts_with('╰'))
+        .collect();
+    assert_eq!(footer.len(), 8, "{rows:#?}");
+    assert!(footer[0].ends_with('…'), "{}", footer[0]);
 }

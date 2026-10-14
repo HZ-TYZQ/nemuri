@@ -134,7 +134,7 @@ impl App {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
-        // 读不了的播放列表和收听进度排在最前面；几条提示一起显示，不能只留第一条，
+        // 读不了的播放列表和收听进度排在最前面；几条提示都要显示，不能只留第一条，
         // 否则升级时总会出现的“已复制旧目录”会把它们挤掉。
         let startup_note = join_notes([playlist_warning, progress_warning, initial_warning]);
         Ok(Self {
@@ -409,8 +409,8 @@ impl App {
     }
 }
 
-/// 把几条启动提示按顺序接成底栏的一行，没有提示时为 None。
+/// 把几条启动提示按顺序接在一起，每条另起一行，底栏会逐条显示；没有提示时为 None。
 pub fn join_notes(notes: impl IntoIterator<Item = Option<String>>) -> Option<String> {
     let notes: Vec<String> = notes.into_iter().flatten().collect();
-    (!notes.is_empty()).then(|| notes.join("；"))
+    (!notes.is_empty()).then(|| notes.join("\n"))
 }

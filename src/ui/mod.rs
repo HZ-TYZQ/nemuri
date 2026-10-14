@@ -24,6 +24,7 @@ use lyrics::{draw_lyrics, lyrics_pane_width};
 pub use mouse::MouseInput;
 use now_playing::draw_now_playing;
 use overlays::draw_overlay;
+use text::{truncate_display, wrap_display};
 use visualizer::{draw_visualizer, visualizer_height};
 
 /// 上一帧的列表布局与滚动位置。
@@ -129,29 +130,35 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut ViewLayout) {
         return;
     }
 
-    let visualizer_height = visualizer_height(area.height, app.config().visualizer_enabled);
+    // 底栏通常一行；提示长时多占的几行先从频谱那里让出来。
+    let footer = footer_lines(app, area, theme);
+    let footer_height = footer.len() as u16;
+    let visualizer_height = visualizer_height(
+        area.height.saturating_sub(footer_height - 1),
+        app.config().visualizer_enabled,
+    );
     if visualizer_height == 0 {
         let chunks = Layout::vertical([
             Constraint::Min(6),
             Constraint::Length(4),
-            Constraint::Length(1),
+            Constraint::Length(footer_height),
         ])
         .split(area);
         let pane = draw_top(frame, app, chunks[0], theme, view);
         view.progress = draw_now_playing(frame, app, chunks[1], theme, pane);
-        draw_footer(frame, app, chunks[2], theme);
+        frame.render_widget(Paragraph::new(footer), chunks[2]);
     } else {
         let chunks = Layout::vertical([
             Constraint::Min(6),
             Constraint::Length(visualizer_height),
             Constraint::Length(4),
-            Constraint::Length(1),
+            Constraint::Length(footer_height),
         ])
         .split(area);
         let pane = draw_top(frame, app, chunks[0], theme, view);
         draw_visualizer(frame, app, chunks[1], theme);
         view.progress = draw_now_playing(frame, app, chunks[2], theme, pane);
-        draw_footer(frame, app, chunks[3], theme);
+        frame.render_widget(Paragraph::new(footer), chunks[3]);
     }
     draw_overlay(frame, app, theme, view);
 }
@@ -176,11 +183,55 @@ fn draw_top(
     true
 }
 
-fn draw_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
-    let line = if app.view().search_active {
+/// 提示文字前面的“ • ”占的列数；折行后的续行缩进同样的宽度。
+const MESSAGE_INDENT: usize = 3;
+
+/// 底栏的各行。提示按终端宽度折行，几条提示（换行分隔）各占一段，续行缩进到圆点后面；
+/// 最多占屏幕高度的三分之一，再放不下时最后一行以省略号结尾。搜索框和按键提示只占一行。
+fn footer_lines(app: &App, area: Rect, theme: &Theme) -> Vec<Line<'static>> {
+    let Some(message) = app
+        .view()
+        .message
+        .as_ref()
+        .filter(|_| !app.view().search_active)
+    else {
+        return vec![footer_line(app, theme)];
+    };
+    let width = usize::from(area.width).saturating_sub(MESSAGE_INDENT);
+    let mut rows: Vec<(bool, String)> = message
+        .split('\n')
+        .flat_map(|note| {
+            wrap_display(note, width)
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| (index == 0, row))
+        })
+        .collect();
+    let max_rows = usize::from(area.height / 3).max(1);
+    if rows.len() > max_rows {
+        rows.truncate(max_rows);
+        if let Some((_, last)) = rows.last_mut() {
+            *last = truncate_display(&format!("{last}…"), width);
+        }
+    }
+    let style = Style::new().fg(theme.primary);
+    rows.into_iter()
+        .map(|(first, row)| {
+            let lead = if first { " • " } else { "   " };
+            Line::from(vec![Span::styled(lead, style), Span::styled(row, style)])
+        })
+        .collect()
+}
+
+/// 只占一行的底栏：搜索框，或者没有提示时的按键提示。
+fn footer_line(app: &App, theme: &Theme) -> Line<'static> {
+    if app.view().search_active {
         Line::from(vec![
             Span::styled(" / ", Style::new().fg(theme.primary).bold()),
-            Span::styled(app.catalog().query(), Style::new().fg(theme.primary)),
+            Span::styled(
+                app.catalog().query().to_owned(),
+                Style::new().fg(theme.primary),
+            ),
             Span::styled("█", Style::new().fg(theme.primary)),
             Span::styled(
                 format!(
@@ -191,16 +242,10 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect, theme: &Theme) {
                 Style::new().fg(theme.muted),
             ),
         ])
-    } else if let Some(message) = &app.view().message {
-        Line::from(vec![
-            Span::styled(" • ", Style::new().fg(theme.primary)),
-            Span::styled(message.clone(), Style::new().fg(theme.primary)),
-        ])
     } else {
         Line::from(Span::styled(
             format!(" {}", keymap::library_hints()),
             Style::new().fg(theme.muted),
         ))
-    };
-    frame.render_widget(Paragraph::new(line), area);
+    }
 }

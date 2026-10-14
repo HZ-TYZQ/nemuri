@@ -42,6 +42,24 @@ pub(super) fn truncate_display(text: &str, max_width: usize) -> String {
     truncated
 }
 
+/// 按终端显示宽度逐字折行（不按词）：每行不超过 width 列，宽字符不会被拆到两行。
+pub(super) fn wrap_display(text: &str, width: usize) -> Vec<String> {
+    let mut rows = vec![String::new()];
+    let mut used = 0;
+    for character in text.chars() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if used + character_width > width && used > 0 {
+            rows.push(String::new());
+            used = 0;
+        }
+        if let Some(row) = rows.last_mut() {
+            row.push(character);
+        }
+        used += character_width;
+    }
+    rows
+}
+
 pub(super) fn column_text(text: &str, width: usize, right: bool) -> String {
     let truncated = truncate_display(text, width);
     let padding = " ".repeat(width.saturating_sub(UnicodeWidthStr::width(truncated.as_str())));
