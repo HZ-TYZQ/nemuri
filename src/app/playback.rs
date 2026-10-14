@@ -193,7 +193,7 @@ impl App {
             .or_else(|| self.selected_track_index());
         let mut natural_end = natural_end;
         for _ in 0..max_attempts {
-            if let Some(path) = self.playback.queue.pop_front() {
+            if let Some(path) = self.take_queue_head() {
                 match self.play_path(&path, true, BagUpdate::Leave) {
                     Ok(()) => {
                         self.report_skipped(&skipped);

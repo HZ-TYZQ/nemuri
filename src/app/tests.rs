@@ -2818,3 +2818,33 @@ fn a_remembered_folder_that_is_gone_shows_everything() {
             .exists()
     );
 }
+
+#[test]
+fn reordering_the_queue_right_after_a_natural_end_stays_in_range() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(2, false, BagUpdate::Reanchor).unwrap();
+    app.playback.queue = [paths[0].clone(), paths[1].clone()].into_iter().collect();
+    press(&mut app, key(KeyCode::Char('Q')));
+    press(&mut app, key(KeyCode::Char('j')));
+    assert_eq!(app.view.queue_selected, 1);
+
+    // 和主循环一样：tick 先修正选择，再处理播完事件；自动切歌取走队首。
+    app.clamp_selections();
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.playback.playing_index, Some(0));
+    // 选择跟着原来选中的 rec2 走，它现在是队首。
+    assert_eq!(app.playback.queue, [paths[1].clone()]);
+    assert_eq!(app.view.queue_selected, 0);
+    // 下一个 tick 之前界面先画一帧，然后用户按 K：已在顶端，什么也不做。
+    render(&app, 100, 30);
+    press(&mut app, key(KeyCode::Char('K')));
+    assert_eq!(app.view.queue_selected, 0);
+    assert_eq!(app.playback.queue, [paths[1].clone()]);
+
+    // 选择万一落在队列外面，重排也只是忽略，不会崩溃。
+    app.view.queue_selected = 1;
+    press(&mut app, key(KeyCode::Char('K')));
+    assert_eq!(app.playback.queue, [paths[1].clone()]);
+}

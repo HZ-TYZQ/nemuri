@@ -61,13 +61,25 @@ impl App {
     }
 
     /// 上移或下移选中条目，选择跟随该条目移动。
+    /// 两端都要在队列范围内：选择可能还没跟上刚刚缩短的队列。
     pub(super) fn move_queue_selected(&mut self, offset: isize) {
-        let target = self.view.queue_selected as isize + offset;
-        if target < 0 || target as usize >= self.playback.queue.len() {
+        let len = self.playback.queue.len();
+        let source = self.view.queue_selected;
+        let Some(target) = source.checked_add_signed(offset) else {
+            return;
+        };
+        if source >= len || target >= len {
             return;
         }
-        let target = target as usize;
-        self.playback.queue.swap(self.view.queue_selected, target);
+        self.playback.queue.swap(source, target);
         self.view.queue_selected = target;
+    }
+
+    /// 自动切歌取走队首。后面的条目都往前挪一位，选择跟着原来选中的那一条走，
+    /// 不必等下一个 tick 修正，也不会指到队列外面。
+    pub(super) fn take_queue_head(&mut self) -> Option<std::path::PathBuf> {
+        let path = self.playback.queue.pop_front()?;
+        self.view.queue_selected = self.view.queue_selected.saturating_sub(1);
+        Some(path)
     }
 }
