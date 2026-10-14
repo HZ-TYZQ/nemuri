@@ -2848,3 +2848,82 @@ fn reordering_the_queue_right_after_a_natural_end_stays_in_range() {
     press(&mut app, key(KeyCode::Char('K')));
     assert_eq!(app.playback.queue, [paths[1].clone()]);
 }
+
+#[test]
+fn seeking_past_the_end_of_a_recording_marks_it_finished() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(
+        app.playback
+            .player
+            .seek_to(20 * MINUTE - Duration::from_secs(10))
+    );
+
+    // L 前进 60 秒越过结尾，切到下一条。
+    press(&mut app, key(KeyCode::Char('L')));
+    assert_eq!(app.playback.playing_index, Some(1));
+    let recording = app.catalog.get(0).unwrap().clone();
+    assert_eq!(
+        app.listened(&recording),
+        Some(crate::progress::Listened::Finished)
+    );
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), Duration::ZERO);
+}
+
+#[test]
+fn seeking_past_the_end_of_the_last_recording_marks_it_finished() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    let only = app.catalog.get(0).unwrap().clone();
+    app.catalog.set_tracks(vec![only.clone()]);
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(
+        app.playback
+            .player
+            .seek_to(20 * MINUTE - Duration::from_secs(10))
+    );
+
+    // 后面没有可放的了：越过结尾后停止播放。
+    press(&mut app, key(KeyCode::Char('L')));
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(
+        app.listened(&only),
+        Some(crate::progress::Listened::Finished)
+    );
+}
+
+#[test]
+fn seeking_past_the_end_of_a_repeated_recording_starts_a_fresh_playthrough() {
+    let (temp, mut app) = test_app(AppConfig {
+        repeat: RepeatMode::All,
+        ..AppConfig::default()
+    });
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    let only = app.catalog.get(0).unwrap().clone();
+    app.catalog.set_tracks(vec![only.clone()]);
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(
+        app.playback
+            .player
+            .seek_to(20 * MINUTE - Duration::from_secs(10))
+    );
+
+    // 列表里只有这一条：越过结尾后从头重放，而不是回到 19:50。
+    press(&mut app, key(KeyCode::Char('L')));
+    assert_eq!(app.playback.playing_index, Some(0));
+    assert_eq!(app.player().position(), Duration::ZERO);
+    assert_eq!(
+        app.listened(&only),
+        Some(crate::progress::Listened::Finished)
+    );
+
+    // 新的一遍照常记录位置。
+    assert!(app.playback.player.seek_to(AT_12_34));
+    app.tick_timers(app.now);
+    assert_eq!(
+        app.listened(&only),
+        Some(crate::progress::Listened::InProgress(AT_12_34))
+    );
+}

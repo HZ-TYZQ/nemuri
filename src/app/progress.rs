@@ -26,6 +26,9 @@ pub(super) struct Progress {
     was_playing: bool,
     /// 不早于这个时间再写盘。
     next_save: Instant,
+    /// 当前这一遍已经记为听完。之后切走或停下时不再按位置记录，
+    /// 免得把“听完”盖回成跳过结尾之前的位置；换上下一遍播放时清除。
+    finished_playthrough: bool,
 }
 
 impl Progress {
@@ -36,14 +39,17 @@ impl Progress {
             urgent: false,
             was_playing: false,
             next_save: now + SAVE_INTERVAL,
+            finished_playthrough: false,
         }
     }
 }
 
 impl App {
-    /// 当前曲目是长录音时，记下它现在的位置。停止状态没有位置可记。
+    /// 当前曲目是长录音时，记下它现在的位置。停止状态没有位置可记；
+    /// 这一遍已经记为听完时也不记。
     pub(super) fn note_progress(&mut self) {
-        if self.playback.player.state() == PlayState::Stopped {
+        if self.progress.finished_playthrough || self.playback.player.state() == PlayState::Stopped
+        {
             return;
         }
         let Some(duration) = self.effective_duration() else {
@@ -64,7 +70,11 @@ impl App {
     }
 
     /// 当前曲目听完了：自然播完，或者往后跳过了结尾。
+    ///
+    /// 往后跳过结尾时播放器还停在跳转前的位置，接着切歌或停止又会先记一次当前位置；
+    /// 所以这一遍从此不再记录，直到换上下一遍播放。
     pub(super) fn mark_finished(&mut self) {
+        self.progress.finished_playthrough = true;
         let Some(track) = self
             .playback
             .playing_index
@@ -77,6 +87,11 @@ impl App {
             self.progress.dirty = true;
             self.progress.urgent = true;
         }
+    }
+
+    /// 换上了新的一遍播放（包括同一条重新开始），又可以按位置记录了。
+    pub(super) fn start_playthrough(&mut self) {
+        self.progress.finished_playthrough = false;
     }
 
     /// 曲库里显示的收听进度；只有长录音才有。

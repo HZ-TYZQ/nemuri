@@ -100,6 +100,7 @@ impl App {
         let start = self.resume_point(index);
         match self.load_track(&path, autoplay, start) {
             Ok(resumed) => {
+                self.start_playthrough();
                 // 只有切歌成功后才改动历史与频谱状态；加载失败时旧曲仍是当前曲目。
                 if let Some(previous) = previous {
                     self.playback.history.push(previous);
