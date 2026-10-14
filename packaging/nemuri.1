@@ -1,14 +1,14 @@
-.TH MUSIC-PLAYER 1 "October 2026" "music-player 1.4.0" "User Commands"
+.TH NEMURI 1 "October 2026" "nemuri 1.4.0" "User Commands"
 .SH NAME
-music-player \- terminal music library player
+nemuri \- terminal player for ASMR and music
 .SH SYNOPSIS
-.B music-player
+.B nemuri
 .RI [ DIRECTORY ]
 .br
-.B music-player
+.B nemuri
 .BI --set-library " PATH"
 .SH DESCRIPTION
-.B music-player
+.B nemuri
 opens a local music library in a terminal interface. With no argument it uses
 the configured library, or the XDG Music directory on first use. A positional
 directory overrides the library for the current session only.
@@ -235,27 +235,38 @@ foreground. An unknown preset falls back to default and an unreadable color
 keeps the preset value. The player never paints a background of its own.
 .SH FILES
 .TP
-.I $XDG_CONFIG_HOME/tui-music-player/config.kdl
+.I $XDG_CONFIG_HOME/nemuri/config.kdl
 Library, playback, sort, interface, and theme settings; see
 .BR CONFIGURATION .
 .TP
-.I $XDG_DATA_HOME/tui-music-player/playlists/*.json
+.I $XDG_DATA_HOME/nemuri/playlists/*.json
 Independent named playlist files.
 .TP
-.I $XDG_DATA_HOME/tui-music-player/session.toml
+.I $XDG_DATA_HOME/nemuri/session.toml
 Track, position, and folder filter at the last exit. On the next launch with
 the same library, the folder filter is restored and that track is loaded paused
 at the saved position; press Space to continue. Deleting the file only forgets
 these.
 .TP
-.I $XDG_DATA_HOME/tui-music-player/progress.json
+.I $XDG_DATA_HOME/nemuri/progress.json
 Listening progress of recordings of 10 minutes or more. Starting such a
 recording continues where it was left unless it was finished; 0 jumps back to
 the start. Library rows show the progress, and a renamed file keeps it after
 the next scan. An unreadable file is renamed aside and a new one is started.
 .TP
-.I $XDG_CACHE_HOME/tui-music-player/library.sqlite3
+.I $XDG_CACHE_HOME/nemuri/library.sqlite3
 Rebuildable incremental music metadata cache.
+.PP
+Version 1.4.0 and earlier were called Music Player, with the command
+.B music-player
+and the folders
+.IR tui-music-player .
+When a
+.I nemuri
+config or data folder does not exist yet, the first start copies the old
+folder there and leaves the old one untouched, so an older version still
+works; the cache is rebuilt instead. If the copy fails, the player does not
+start and names both folders.
 .SH AUTHORS
 HZ-TYZQ
 .SH LICENSE

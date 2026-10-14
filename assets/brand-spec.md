@@ -1,4 +1,4 @@
-# Music Player · Brand Spec
+# Nemuri · Brand Spec
 
 > 固化日期：2026-08-31
 > 版权所有：HZ-TYZQ
@@ -9,10 +9,10 @@
 
 ### 正式图标
 
-- SVG 主文件：`assets/icons/music-player.svg`
-- 小尺寸 SVG：`assets/icons/music-player-small.svg`，只用于 16 px 一档
-- 48 px 兼容图标：`assets/icons/music-player-48.png`
-- Windows 多尺寸图标：`assets/icons/music-player.ico`
+- SVG 主文件：`assets/icons/nemuri.svg`
+- 小尺寸 SVG：`assets/icons/nemuri-small.svg`，只用于 16 px 一档
+- 48 px 兼容图标：`assets/icons/nemuri-48.png`
+- Windows 多尺寸图标：`assets/icons/nemuri.ico`
 - 原始概念稿：`assets/source/icon-concept.png`
 - 构图含义：石墨底板上的五柱音频频谱，直接复用 TUI 频谱的画法和配色。去掉终端窗口装饰，保证小尺寸下依然清晰。
 

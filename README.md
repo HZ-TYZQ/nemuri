@@ -1,6 +1,6 @@
-# Music Player
+# Nemuri
 
-Music Player 是一个用 Rust 编写的终端音乐库播放器，以 ASMR 这类按创作者分文件夹整理的长录音为主要场景，也照常播放普通音乐。它使用 Rodio 播放、Lofty 读取媒体信息，用 SQLite 保存可随时重建的增量索引，并把配置与播放列表保存在平台标准用户目录中。
+Nemuri（眠り，睡眠）是一个用 Rust 编写的终端播放器，以 ASMR 这类按创作者分文件夹整理的长录音为主要场景，也照常播放普通音乐。1.4.0 及以前叫 Music Player，升级见[从 Music Player 升级](#从-music-player-升级)。它使用 Rodio 播放、Lofty 读取媒体信息，用 SQLite 保存可随时重建的增量索引，并把配置与播放列表保存在平台标准用户目录中。
 
 ## 功能
 
@@ -31,7 +31,7 @@ Music Player 是一个用 Rust 编写的终端音乐库播放器，以 ASMR 这�
 - Fedora RPM 使用系统的 ALSA/PipeWire 与 SQLite
 - Windows Installer 与 Portable ZIP 把 SQLite 编入程序，通过 WASAPI 输出，用户无需另行安装解码运行时
 
-Windows Installer 默认安装到当前用户目录，不要求管理员权限，并创建开始菜单入口。Portable ZIP 解压后运行 `music-player.cmd`。两种 Windows 发行包都可在 Windows Terminal 中使用。
+Windows Installer 默认安装到当前用户目录，不要求管理员权限，并创建开始菜单入口。Portable ZIP 解压后运行 `nemuri.cmd`。两种 Windows 发行包都可在 Windows Terminal 中使用。
 
 第一版 Windows 包尚未进行 Authenticode 签名，Windows Defender SmartScreen 可能显示未知发布者提示。请只从项目 GitHub Release 下载，并使用同一 Release 中的 `SHA256SUMS.txt` 核对文件。
 
@@ -43,6 +43,17 @@ sudo dnf install \
   alsa-lib-devel \
   sqlite-devel
 ```
+
+## 从 Music Player 升级
+
+1.4.0 及以前叫 Music Player：命令是 `music-player`，数据放在 `tui-music-player` 目录。改名后：
+
+- 命令改为 `nemuri`，man 手册是 `man nemuri`，桌面菜单项叫 Nemuri。
+- 第一次启动时，`nemuri` 配置目录或数据目录还不存在，就把对应的 `tui-music-player` 目录整个复制过去，包括配置、播放列表、上次播放位置和收听进度，底栏会说明一句。旧目录原样保留，退回旧版本时一切照旧；确认无误后可以删掉旧目录，以及旧缓存 `~/.cache/tui-music-player`（Windows 为 `%LOCALAPPDATA%\tui-music-player`）。新缓存在第一次扫描时重建。
+- 复制只在新目录还不存在时做一次，之后新旧两边各管各的，在两个版本之间来回切换时改动不会同步。
+- 复制失败时程序不会启动，而是在终端里说明原因和两个目录的位置；处理好（例如权限）后再启动即可。
+- 新的 RPM 包会替换旧的 `music-player` 包；Windows 安装程序会原地升级已经装好的 Music Player，沿用原来的安装目录和 PATH 设置，开始菜单项改为 Nemuri。
+- Linux 系统媒体控制里的名字改为 Nemuri，总线名为 `org.mpris.MediaPlayer2.nemuri`；用 `playerctl -p music_player` 指定播放器的脚本要改成 `playerctl -p nemuri`。
 
 ## 使用
 
@@ -60,10 +71,10 @@ cargo run --locked -- --set-library /path/to/music
 查看完整命令行帮助：
 
 ```sh
-music-player --help
+nemuri --help
 ```
 
-通过 RPM 安装后，也可以在桌面应用菜单中搜索“Music Player”或“音乐播放器”。菜单项会使用桌面环境配置的默认终端启动程序，不要求安装某个特定的终端模拟器。
+通过 RPM 安装后，也可以在桌面应用菜单中搜索“Nemuri”“ASMR”或“睡眠”。菜单项会使用桌面环境配置的默认终端启动程序，不要求安装某个特定的终端模拟器。
 
 扫描不会跟随音乐库目录内部的符号链接：目录软链接会被跳过以避免循环，指向音频文件的软链接目前也不会被收录。如果音乐存放在其他位置，请把真实文件或硬链接放进音乐库目录。
 
@@ -128,11 +139,11 @@ music-player --help
 
 | 数据 | Linux | Windows |
 |---|---|---|
-| 配置 | `$XDG_CONFIG_HOME/tui-music-player/config.kdl` | `%APPDATA%\tui-music-player\config.kdl` |
-| 播放列表 | `$XDG_DATA_HOME/tui-music-player/playlists/*.json` | `%APPDATA%\tui-music-player\playlists\*.json` |
-| 上次播放位置和文件夹筛选 | `$XDG_DATA_HOME/tui-music-player/session.toml` | `%APPDATA%\tui-music-player\session.toml` |
-| 长录音的收听进度 | `$XDG_DATA_HOME/tui-music-player/progress.json` | `%APPDATA%\tui-music-player\progress.json` |
-| 可删除缓存 | `$XDG_CACHE_HOME/tui-music-player/library.sqlite3` | `%LOCALAPPDATA%\tui-music-player\library.sqlite3` |
+| 配置 | `$XDG_CONFIG_HOME/nemuri/config.kdl` | `%APPDATA%\nemuri\config.kdl` |
+| 播放列表 | `$XDG_DATA_HOME/nemuri/playlists/*.json` | `%APPDATA%\nemuri\playlists\*.json` |
+| 上次播放位置和文件夹筛选 | `$XDG_DATA_HOME/nemuri/session.toml` | `%APPDATA%\nemuri\session.toml` |
+| 长录音的收听进度 | `$XDG_DATA_HOME/nemuri/progress.json` | `%APPDATA%\nemuri\progress.json` |
+| 可删除缓存 | `$XDG_CACHE_HOME/nemuri/library.sqlite3` | `%LOCALAPPDATA%\nemuri\library.sqlite3` |
 
 Linux 没有显式设置 XDG 基础目录时，通常对应 `~/.config`、`~/.local/share` 和 `~/.cache`。Windows Installer 和 Portable ZIP 使用相同的 AppData 目录；升级、删除 Portable 文件或卸载程序都不会删除这些用户数据。
 
@@ -228,17 +239,17 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all-targets --locked
 
 ./packaging/build-rpm.sh
-sudo dnf install ./packaging/rpmbuild/RPMS/x86_64/music-player-1.4.0-1.fc44.x86_64.rpm
+sudo dnf install ./packaging/rpmbuild/RPMS/x86_64/nemuri-1.4.0-1.fc44.x86_64.rpm
 ```
 
-RPM 构建脚本会生成离线 vendor 归档、二进制 RPM 和 SRPM。安装后的 RPM 同时提供命令行程序、man 手册、桌面菜单入口、可缩放 SVG 图标和 48 px 兼容图标。升级使用 `sudo dnf upgrade <RPM 路径>`，卸载使用 `sudo dnf remove music-player`。
+RPM 构建脚本会生成离线 vendor 归档、二进制 RPM 和 SRPM。安装后的 RPM 同时提供命令行程序、man 手册、桌面菜单入口、可缩放 SVG 图标和 48 px 兼容图标。升级使用 `sudo dnf upgrade <RPM 路径>`，卸载使用 `sudo dnf remove nemuri`。
 
 Windows MSVC 构建、测试和打包由 GitHub Actions 的 Windows runner 完成，生成：
 
-- `music-player-<版本>-windows-x86_64-setup.exe`
-- `music-player-<版本>-windows-x86_64-portable.zip`
+- `nemuri-<版本>-windows-x86_64-setup.exe`
+- `nemuri-<版本>-windows-x86_64-portable.zip`
 
-Installer 的“添加到当前用户 PATH”选项默认不勾选。启用后可以在新打开的终端中直接运行 `music-player`，卸载时只移除应用自己的 PATH 条目。
+Installer 的“添加到当前用户 PATH”选项默认不勾选。启用后可以在新打开的终端中直接运行 `nemuri`，卸载时只移除应用自己的 PATH 条目。
 
 ## 贡献者
 

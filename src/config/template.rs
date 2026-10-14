@@ -16,7 +16,7 @@ pub(super) fn render(config: &AppConfig) -> String {
 // 排序和各个开关）会在退出时写回这里，只改动那几项，其余内容和注释原样保留。
 // 布尔值写作 #true / #false，字符串要加双引号。
 
-// 主音乐库目录，可以用 ~ 开头表示家目录；也可以用 music-player --set-library PATH 设置。
+// 主音乐库目录，可以用 ~ 开头表示家目录；也可以用 nemuri --set-library PATH 设置。
 {library}
 
 playback {{
