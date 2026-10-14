@@ -69,10 +69,25 @@ lyrics: synchronized lyrics scroll with the current line highlighted, and plain
 lyrics scroll with playback progress. Narrower terminals show the current
 synchronized line on the now playing border. Hiding lyrics gives the library
 the full width. LRC files may be UTF-8, GBK, or UTF-16
-with a byte order mark. The choice is restored on the next launch.
+with a byte order mark. Placeholder text that music platforms put in place of
+lyrics, such as "Instrumental" or its Chinese equivalents, is treated as no
+lyrics, and a placeholder LRC file falls back to the embedded lyrics. The
+choice is restored on the next launch.
 .TP
 .B m
 Toggle mute.
+.TP
+.BR , " or " .
+Move the left/right balance 10 steps to the left or right, between -100 and
+100. Leaning to one side only lowers the other side, which is silent at the
+end of the range. Mono files are balanced as well. The setting applies at once
+and is restored on the next launch.
+.TP
+.B w
+Swap the left and right channels, for headphones worn the wrong way round. The
+balance refers to the ears and applies after the swap. The now playing bar
+shows the balance and the swap whenever they are not at the default. The choice
+is restored on the next launch.
 .TP
 .B M
 Enable or disable mouse support. With the mouse enabled, a single click selects
@@ -80,6 +95,13 @@ a row, a double click plays it, the wheel moves the selection, and clicking the
 progress bar seeks. Mouse capture takes over the terminal's own drag selection;
 most terminals restore it while Shift is held. The choice is restored on the
 next launch.
+.TP
+.B i
+Toggle privacy mode. While it is on, the system media controls (MPRIS on Linux,
+SMTC on Windows) receive only a generic title instead of the track title,
+artist, album, and file path, so desktop and lock-screen widgets cannot show
+what is playing; playback can still be controlled from them. The now playing
+bar marks the mode. Off by default; the choice is restored on the next launch.
 .TP
 .BR n , p
 Play the next track or return through actual playback history.
@@ -140,7 +162,8 @@ clears the queue.
 Open the named playlist panel.
 .TP
 .B ?
-Open the complete in-application help.
+Open the complete in-application help. On short terminals it scrolls with the
+arrow keys, j and k, or the mouse wheel.
 .TP
 .B q
 Quit.
@@ -159,12 +182,15 @@ playback {
     muted #false
     repeat "stop"       // stop, none, all, or one
     shuffle #false
+    balance 0           // -100 (left only) to 100 (right only)
+    swap-channels #false
 }
 sort "artist" descending=#false
 interface {
     visualizer #true
     lyrics #true
     mouse #true
+    privacy #false
 }
 sleep {
     fade 30             // seconds, 0 to 600; 0 means no fade
@@ -181,8 +207,8 @@ may start with ~ for the home directory. Sort keys are path, title, artist,
 album, and duration. Changes take effect on the next start.
 .PP
 On exit the player re-reads the file and rewrites only the settings changed
-while it ran (volume, mute, repeat, shuffle, sort, and the visualizer, lyrics,
-and mouse switches), in place, keeping comments and layout; settings missing
+while it ran (volume, mute, repeat, shuffle, balance, channel swap, sort, and
+the visualizer, lyrics, mouse, and privacy switches), in place, keeping comments and layout; settings missing
 from the file are appended to their block. Other edits made while it runs are
 kept.
 .B --set-library
