@@ -14,6 +14,7 @@ use rodio::decoder::DecoderBuilder;
 use rodio::mixer::mixer;
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Source};
 
+use super::channels::{ChannelMix, MixControl, Mixed};
 use super::spectrum::{InternalSpectrumEvent, PcmBatch, PcmTap, SpectrumWorker};
 use super::{PlayState, PlaybackBackend, PlayerEvent};
 
@@ -57,6 +58,9 @@ pub struct Player {
     muted: AtomicBool,
     /// 睡眠定时淡出时的增益，与用户音量相乘。
     fade_gain: f32,
+    channel_mix: ChannelMix,
+    /// 与正在播放的音频共用，改平衡或互换时不用重新装载。
+    mix_control: Arc<MixControl>,
     spectrum_enabled: Arc<AtomicBool>,
     spectrum_live: Arc<AtomicBool>,
     is_playing: AtomicBool,
@@ -160,6 +164,8 @@ impl Player {
             logical_volume: AtomicU8::new(100),
             muted: AtomicBool::new(false),
             fade_gain: 1.0,
+            channel_mix: ChannelMix::default(),
+            mix_control: Arc::new(MixControl::new(ChannelMix::default())),
             spectrum_enabled,
             spectrum_live,
             is_playing: AtomicBool::new(false),
@@ -248,13 +254,18 @@ impl Player {
             Arc::clone(&self.pcm_slot),
             Arc::clone(&self.spectrum_live),
         );
-        self.backend.append(EndSignal {
-            inner: tap,
-            generation,
-            events: self.event_tx.clone(),
-            samples: initial_samples,
-            signaled: false,
-        });
+        // 平衡和互换包在最外层：EndSignal 仍按解码出的声道数计算位置，
+        // 频谱看到的也是调整前的声音。
+        self.backend.append(Mixed::new(
+            EndSignal {
+                inner: tap,
+                generation,
+                events: self.event_tx.clone(),
+                samples: initial_samples,
+                signaled: false,
+            },
+            Arc::clone(&self.mix_control),
+        ));
 
         self.apply_volume();
         if target == PlayState::Playing {
@@ -506,6 +517,11 @@ impl PlaybackBackend for Player {
         self.apply_volume();
     }
 
+    fn set_channel_mix(&mut self, mix: ChannelMix) {
+        self.channel_mix = mix;
+        self.mix_control.set(mix);
+    }
+
     fn set_spectrum_enabled(&mut self, enabled: bool) {
         self.spectrum_enabled.store(enabled, Ordering::Relaxed);
         self.refresh_spectrum_live();
@@ -522,6 +538,7 @@ impl PlaybackBackend for Player {
                     player.set_volume(self.volume());
                     player.set_muted(self.is_muted());
                     player.set_fade_gain(self.fade_gain);
+                    player.set_channel_mix(self.channel_mix);
                     player.set_spectrum_enabled(self.spectrum_enabled.load(Ordering::Relaxed));
                     player.resume();
                     *self = *player;

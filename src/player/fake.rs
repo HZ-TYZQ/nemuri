@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
-use super::{PlayState, PlaybackBackend, PlayerEvent};
+use super::{ChannelMix, PlayState, PlaybackBackend, PlayerEvent};
 
 /// 测试端也要改动的状态，放在共享单元里。
 struct FakeState {
@@ -184,6 +184,8 @@ impl PlaybackBackend for FakeBackend {
     fn set_fade_gain(&mut self, gain: f32) {
         self.shared.borrow_mut().fade_gain = gain;
     }
+
+    fn set_channel_mix(&mut self, _mix: ChannelMix) {}
 
     fn set_spectrum_enabled(&mut self, _enabled: bool) {}
 

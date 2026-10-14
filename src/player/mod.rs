@@ -56,6 +56,8 @@ pub trait PlaybackBackend {
     /// 淡出用的增益（0.0–1.0），与用户音量相乘后输出。它不改变 `volume()`，
     /// 因此不会被写回配置、报告给系统媒体控制或显示在界面上。
     fn set_fade_gain(&mut self, gain: f32);
+    /// 左右平衡与声道互换，从正在播放的这一帧之后生效。
+    fn set_channel_mix(&mut self, mix: ChannelMix);
     fn set_spectrum_enabled(&mut self, enabled: bool);
     /// 音频输出中断、等待恢复时为 true。
     fn output_unavailable(&self) -> bool;
@@ -63,8 +65,10 @@ pub trait PlaybackBackend {
 }
 
 mod backend;
+mod channels;
 #[cfg(test)]
 pub(crate) mod fake;
 mod spectrum;
 
 pub use self::backend::Player;
+pub use self::channels::{ChannelMix, MAX_BALANCE};

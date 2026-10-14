@@ -6,7 +6,7 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use music_player::player::{PlayState, PlaybackBackend, Player, PlayerEvent};
+use music_player::player::{ChannelMix, PlayState, PlaybackBackend, Player, PlayerEvent};
 
 fn write_test_wav(path: &Path, duration_secs: f32) {
     let sample_rate = 8_000u32;
@@ -344,6 +344,40 @@ fn open_at_then_resume_plays_on_from_the_saved_position() {
         position > Duration::from_millis(1600) && position < Duration::from_millis(2300),
         "续播应从 1.5s 往后走，实际 {position:?}"
     );
+}
+
+#[test]
+fn balance_and_swap_keep_mono_positions_and_the_end_in_real_time() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("mono.wav");
+    write_test_wav(&wav, 0.6);
+    let mut player = Player::new_for_tests().unwrap();
+    // 单声道被复制成左右两个声道，位置不能因此快一倍。
+    player.set_channel_mix(ChannelMix {
+        balance: 40,
+        swapped: true,
+    });
+    player.play(&wav).unwrap();
+    let mut position = player.position();
+    for _ in 0..5 {
+        sleep(Duration::from_millis(40));
+        position = player.position();
+    }
+    assert!(
+        position > Duration::from_millis(120) && position < Duration::from_millis(450),
+        "播放 200ms 后位置是 {position:?}"
+    );
+    assert!(player.seek_to(Duration::from_millis(300)));
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let events = loop {
+        let events = player.drain_events();
+        if events.contains(&PlayerEvent::EndOfStream) || Instant::now() > deadline {
+            break events;
+        }
+        sleep(Duration::from_millis(10));
+    };
+    assert!(events.contains(&PlayerEvent::EndOfStream), "{events:?}");
 }
 
 #[test]
