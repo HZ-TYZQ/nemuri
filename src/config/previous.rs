@@ -1,0 +1,250 @@
+//! 改名为 Nemuri 之前，设置和用户数据放在 `tui-music-player` 目录里。
+//!
+//! 新目录还不存在时，第一次启动把旧目录整个复制过来，旧目录原样保留：
+//! 退回旧版本时一切照旧。缓存随时可以重建，不复制。
+
+use std::fs;
+use std::io;
+use std::path::Path;
+
+use super::AppPaths;
+
+/// 改名之前的目录名。
+pub(super) const PREVIOUS_APP_DIR: &str = "tui-music-player";
+
+/// 新目录还不存在、旧目录存在时复制过来，返回要在底栏显示的说明；没有可复制的就返回 None。
+///
+/// 复制失败时返回错误，程序不应继续启动：否则会在新目录里从头开始，
+/// 之后再也不会复制，设置和播放记录就悄悄分成了两份。
+pub fn adopt_previous_dirs(paths: &AppPaths) -> Result<Option<String>, String> {
+    let mut copied = false;
+    for (old, new) in &paths.renamed_dirs {
+        if new.exists() || !old.is_dir() {
+            continue;
+        }
+        copy_into_place(old, new).map_err(|error| {
+            format!(
+                "无法把旧目录 {} 复制到 {}: {error}。旧目录没有改动，处理好后再启动",
+                old.display(),
+                new.display()
+            )
+        })?;
+        copied = true;
+    }
+    Ok(copied.then(|| {
+        format!(
+            "已把 {PREVIOUS_APP_DIR} 目录里的设置和播放记录复制到新目录；旧目录原样保留，确认无误后可以删除"
+        )
+    }))
+}
+
+/// 先复制到旁边的临时目录，完整复制后再改名成新目录：中途退出时新目录不存在，
+/// 下次启动会重新复制，上次留下的临时目录先删掉。
+fn copy_into_place(old: &Path, new: &Path) -> io::Result<()> {
+    let mut staging = new.as_os_str().to_owned();
+    staging.push(".migrating");
+    let staging = Path::new(&staging);
+    if staging.exists() {
+        fs::remove_dir_all(staging)?;
+    }
+    if let Some(parent) = new.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let result = copy_tree(old, staging).and_then(|()| fs::rename(staging, new));
+    if result.is_err() {
+        let _ = fs::remove_dir_all(staging);
+    }
+    result
+}
+
+/// 递归复制目录。符号链接按它指向的内容复制，程序自己从不在这里创建链接。
+fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
+    fs::create_dir(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let source = entry.path();
+        let target = to.join(entry.file_name());
+        if fs::metadata(&source)?.is_dir() {
+            copy_tree(&source, &target)?;
+        } else {
+            fs::copy(&source, &target)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::config::AppConfig;
+
+    fn write(path: &Path, text: &str) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+
+    fn read(path: &Path) -> String {
+        fs::read_to_string(path).unwrap()
+    }
+
+    /// Linux 的布局：配置、数据、缓存各在一处。
+    fn linux_paths(root: &Path) -> AppPaths {
+        AppPaths::from_roots(
+            root.join("config"),
+            root.join("data"),
+            root.join("cache"),
+            None,
+        )
+    }
+
+    /// 旧版本留下的配置、播放列表、会话、进度和缓存。
+    fn seed_previous(root: &Path) {
+        write(
+            &root.join("config/tui-music-player/config.kdl"),
+            "playback {\n    volume 35\n}\n",
+        );
+        write(
+            &root.join("data/tui-music-player/playlists/夜里.json"),
+            "{\"tracks\":[]}",
+        );
+        write(
+            &root.join("data/tui-music-player/session.toml"),
+            "version = 1\n",
+        );
+        write(&root.join("data/tui-music-player/progress.json"), "{}");
+        write(
+            &root.join("cache/tui-music-player/library.sqlite3"),
+            "cache",
+        );
+    }
+
+    #[test]
+    fn the_first_start_copies_settings_and_data_and_keeps_the_old_folders() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        seed_previous(root);
+        let paths = linux_paths(root);
+
+        let message = adopt_previous_dirs(&paths).unwrap().unwrap();
+        assert!(message.contains("复制到新目录"), "{message}");
+        assert_eq!(read(&paths.config_file), "playback {\n    volume 35\n}\n");
+        assert_eq!(
+            read(&paths.playlists_dir.join("夜里.json")),
+            "{\"tracks\":[]}"
+        );
+        assert_eq!(read(&paths.session_file), "version = 1\n");
+        assert_eq!(read(&paths.progress_file), "{}");
+        // 缓存可以重建，不复制；旧目录一个文件也不少。
+        assert!(!root.join("cache/nemuri").exists());
+        assert_eq!(
+            read(&root.join("config/tui-music-player/config.kdl")),
+            "playback {\n    volume 35\n}\n"
+        );
+        assert!(root.join("data/tui-music-player/progress.json").exists());
+        assert!(!root.join("config/nemuri.migrating").exists());
+
+        // 复制过来的配置照常读取。
+        assert_eq!(AppConfig::load(&paths).unwrap().config.volume, 35);
+    }
+
+    #[test]
+    fn nothing_is_copied_once_the_new_folders_exist() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        seed_previous(root);
+        let paths = linux_paths(root);
+        adopt_previous_dirs(&paths).unwrap();
+        write(&paths.config_file, "playback {\n    volume 80\n}\n");
+
+        assert_eq!(adopt_previous_dirs(&paths).unwrap(), None);
+        assert_eq!(read(&paths.config_file), "playback {\n    volume 80\n}\n");
+    }
+
+    #[test]
+    fn a_fresh_install_has_nothing_to_copy() {
+        let temp = tempfile::tempdir().unwrap();
+        let paths = linux_paths(temp.path());
+        assert_eq!(adopt_previous_dirs(&paths).unwrap(), None);
+        assert!(!temp.path().join("config").exists());
+    }
+
+    #[test]
+    fn a_shared_config_and_data_root_is_copied_once() {
+        // Windows 上配置和数据都在 %APPDATA%。
+        let temp = tempfile::tempdir().unwrap();
+        let roaming = temp.path().join("Roaming");
+        write(
+            &roaming.join("tui-music-player/config.kdl"),
+            "sort \"title\"\n",
+        );
+        write(&roaming.join("tui-music-player/progress.json"), "{}");
+        let paths = AppPaths::from_roots(
+            roaming.clone(),
+            roaming.clone(),
+            temp.path().join("Local"),
+            None,
+        );
+        assert_eq!(paths.renamed_dirs.len(), 1);
+
+        assert!(adopt_previous_dirs(&paths).unwrap().is_some());
+        assert_eq!(read(&paths.config_file), "sort \"title\"\n");
+        assert_eq!(read(&paths.progress_file), "{}");
+    }
+
+    #[test]
+    fn a_copy_cut_short_last_time_starts_over() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        seed_previous(root);
+        write(&root.join("config/nemuri.migrating/half-copied"), "x");
+        let paths = linux_paths(root);
+
+        assert!(adopt_previous_dirs(&paths).unwrap().is_some());
+        assert!(!root.join("config/nemuri/half-copied").exists());
+        assert!(!root.join("config/nemuri.migrating").exists());
+        assert!(paths.config_file.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_copy_stops_the_start_and_leaves_no_new_folder() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        seed_previous(root);
+        let locked = root.join("data/tui-music-player/progress.json");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&locked).is_ok() {
+            // 以 root 运行（例如 RPM 的 %check）时权限挡不住读取，这个场景无从模拟。
+            return;
+        }
+        let paths = linux_paths(root);
+
+        let error = adopt_previous_dirs(&paths).unwrap_err();
+        assert!(error.contains("旧目录没有改动"), "{error}");
+        assert!(!root.join("data/nemuri").exists());
+        assert!(!root.join("data/nemuri.migrating").exists());
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[test]
+    fn renamed_dirs_pair_each_old_folder_with_its_new_one() {
+        let paths = linux_paths(Path::new("/root"));
+        assert_eq!(
+            paths.renamed_dirs,
+            [
+                (
+                    PathBuf::from("/root/config/tui-music-player"),
+                    PathBuf::from("/root/config/nemuri")
+                ),
+                (
+                    PathBuf::from("/root/data/tui-music-player"),
+                    PathBuf::from("/root/data/nemuri")
+                ),
+            ]
+        );
+    }
+}

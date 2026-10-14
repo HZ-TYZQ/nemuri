@@ -31,12 +31,18 @@ fn main() -> ExitCode {
 fn run_application() -> Result<(), String> {
     let cli = Cli::parse();
     let paths = AppPaths::discover().map_err(|error| format!("无法确定用户数据目录: {error}"))?;
+    let adopted = config::adopt_previous_dirs(&paths)?;
     let LoadedConfig {
         mut config,
-        message: mut warning,
+        message: warning,
         writable,
     } = AppConfig::load(&paths)
         .map_err(|error| format!("无法读取配置 {}: {error}", paths.config_file.display()))?;
+    // 复制了旧目录时先说这件事；配置本身有问题的提示接在后面，不被盖掉。
+    let mut warning = match (adopted, warning) {
+        (Some(adopted), Some(warning)) => Some(format!("{adopted}；{warning}")),
+        (adopted, warning) => adopted.or(warning),
+    };
 
     let library_dir = if let Some(path) = cli.set_library {
         let path = validate_directory(&path).map_err(|error| error.to_string())?;

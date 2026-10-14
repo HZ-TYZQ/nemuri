@@ -5,6 +5,7 @@
 
 mod document;
 mod legacy;
+mod previous;
 mod template;
 
 use std::fs;
@@ -15,7 +16,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::theme::Theme;
 use crate::track::{RepeatMode, SortOrder};
 
-const APP_DIR: &str = "tui-music-player";
+use previous::PREVIOUS_APP_DIR;
+pub use previous::adopt_previous_dirs;
+
+const APP_DIR: &str = "nemuri";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppPaths {
@@ -28,6 +32,9 @@ pub struct AppPaths {
     pub progress_file: PathBuf,
     pub cache_db: PathBuf,
     pub default_music_dir: Option<PathBuf>,
+    /// 改名前的配置和数据目录，以及各自对应的新目录（见 [`adopt_previous_dirs`]）。
+    /// 配置和数据在同一处时（Windows 的 %APPDATA%）只有一对。缓存不在其中。
+    pub renamed_dirs: Vec<(PathBuf, PathBuf)>,
 }
 
 impl AppPaths {
@@ -44,6 +51,10 @@ impl AppPaths {
         cache: PathBuf,
         music: Option<PathBuf>,
     ) -> Self {
+        let mut renamed_dirs = vec![(config.join(PREVIOUS_APP_DIR), config.join(APP_DIR))];
+        if data != config {
+            renamed_dirs.push((data.join(PREVIOUS_APP_DIR), data.join(APP_DIR)));
+        }
         Self {
             config_file: config.join(APP_DIR).join("config.kdl"),
             legacy_config_file: config.join(APP_DIR).join("config.toml"),
@@ -52,6 +63,7 @@ impl AppPaths {
             progress_file: data.join(APP_DIR).join("progress.json"),
             cache_db: cache.join(APP_DIR).join("library.sqlite3"),
             default_music_dir: music,
+            renamed_dirs,
         }
     }
 }
@@ -230,27 +242,24 @@ mod tests {
         );
         assert_eq!(
             paths.config_file,
-            PathBuf::from("/config/tui-music-player/config.kdl")
+            PathBuf::from("/config/nemuri/config.kdl")
         );
         assert_eq!(
             paths.legacy_config_file,
-            PathBuf::from("/config/tui-music-player/config.toml")
+            PathBuf::from("/config/nemuri/config.toml")
         );
-        assert_eq!(
-            paths.playlists_dir,
-            PathBuf::from("/data/tui-music-player/playlists")
-        );
+        assert_eq!(paths.playlists_dir, PathBuf::from("/data/nemuri/playlists"));
         assert_eq!(
             paths.cache_db,
-            PathBuf::from("/cache/tui-music-player/library.sqlite3")
+            PathBuf::from("/cache/nemuri/library.sqlite3")
         );
         assert_eq!(
             paths.session_file,
-            PathBuf::from("/data/tui-music-player/session.toml")
+            PathBuf::from("/data/nemuri/session.toml")
         );
         assert_eq!(
             paths.progress_file,
-            PathBuf::from("/data/tui-music-player/progress.json")
+            PathBuf::from("/data/nemuri/progress.json")
         );
         assert_eq!(paths.default_music_dir, Some(PathBuf::from("/music")));
     }

@@ -1539,8 +1539,7 @@ theme {
     app.dispatch(Action::ToggleLyrics);
     app.save_settings().unwrap();
 
-    let saved =
-        std::fs::read_to_string(temp.path().join("config/tui-music-player/config.kdl")).unwrap();
+    let saved = std::fs::read_to_string(temp.path().join("config/nemuri/config.kdl")).unwrap();
     assert_eq!(
         saved,
         "// 我的播放器\nplayback {\n    volume 55 // 夜里小声点\n    shuffle #true\n}\n\ntheme {\n    preset \"light\"\n}\n\ninterface {\n    lyrics #false\n}\n"
@@ -1557,8 +1556,7 @@ fn a_config_kdl_with_a_syntax_error_is_never_rewritten() {
 
     app.dispatch(Action::ToggleShuffle);
     app.save_settings().unwrap();
-    let saved =
-        std::fs::read_to_string(temp.path().join("config/tui-music-player/config.kdl")).unwrap();
+    let saved = std::fs::read_to_string(temp.path().join("config/nemuri/config.kdl")).unwrap();
     assert_eq!(saved, text);
 }
 
@@ -2673,7 +2671,7 @@ fn songs_and_finished_recordings_start_from_the_beginning() {
 fn progress_is_written_every_30_seconds_or_at_once_when_playback_stops() {
     let (temp, mut app) = test_app(AppConfig::default());
     recordings_fixture(&mut app, &temp.path().join("music"));
-    let file = temp.path().join("data/tui-music-player/progress.json");
+    let file = temp.path().join("data/nemuri/progress.json");
     let start = app.now;
     app.play_index(0, false, BagUpdate::Reanchor).unwrap();
     assert!(app.playback.player.seek_to(AT_12_34));
@@ -2811,12 +2809,7 @@ fn a_remembered_folder_that_is_gone_shows_everything() {
 
     // 退出时既没有曲目也没有筛选：会话文件被清掉。
     app.save_session().unwrap();
-    assert!(
-        !temp
-            .path()
-            .join("data/tui-music-player/session.toml")
-            .exists()
-    );
+    assert!(!temp.path().join("data/nemuri/session.toml").exists());
 }
 
 #[test]
