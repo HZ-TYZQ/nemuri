@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 
 use crate::config::{AppConfig, AppPaths};
 use crate::player::fake::{FakeBackend, FakeControl};
-use crate::player::{PlayState, PlaybackBackend, Player};
+use crate::player::{ChannelMix, PlayState, PlaybackBackend, Player};
 use crate::track::{Folder, RepeatMode, SortKey, Track};
 
 use crate::ui::{MouseInput, ViewLayout};
@@ -2315,6 +2315,83 @@ fn changing_tracks_keeps_the_fade_and_t_restores_full_volume() {
     assert_eq!(app.sleep_remaining(), Some(30 * MINUTE));
     app.tick_timers(fading + MINUTE);
     assert_eq!(control.fade_gain(), 1.0);
+}
+
+#[test]
+fn balance_keys_step_by_ten_stop_at_the_ends_and_reach_the_backend() {
+    let (_temp, mut app, control) = test_app_with_control(AppConfig {
+        balance: -90,
+        swap_channels: true,
+        ..AppConfig::default()
+    });
+    // 启动时就按配置设好。
+    assert_eq!(
+        control.channel_mix(),
+        ChannelMix {
+            balance: -90,
+            swapped: true
+        }
+    );
+
+    press(&mut app, key(KeyCode::Char(',')));
+    assert_eq!(app.config.balance, -100);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("平衡：偏左 100（右声道 0%）")
+    );
+    press(&mut app, key(KeyCode::Char(',')));
+    assert_eq!(app.config.balance, -100);
+
+    for _ in 0..10 {
+        press(&mut app, key(KeyCode::Char('.')));
+    }
+    assert_eq!(app.config.balance, 0);
+    assert_eq!(app.view.message.as_deref(), Some("平衡：居中"));
+    for _ in 0..3 {
+        press(&mut app, key(KeyCode::Char('.')));
+    }
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("平衡：偏右 30（左声道 70%）")
+    );
+    for _ in 0..10 {
+        press(&mut app, key(KeyCode::Char('.')));
+    }
+    assert_eq!(app.config.balance, 100);
+    assert_eq!(
+        control.channel_mix(),
+        ChannelMix {
+            balance: 100,
+            swapped: true
+        }
+    );
+
+    press(&mut app, key(KeyCode::Char('w')));
+    assert!(!app.config.swap_channels);
+    assert!(!control.channel_mix().swapped);
+    assert_eq!(app.view.message.as_deref(), Some("左右声道已恢复"));
+    press(&mut app, key(KeyCode::Char('w')));
+    assert!(control.channel_mix().swapped);
+    assert_eq!(app.view.message.as_deref(), Some("已互换左右声道"));
+}
+
+#[test]
+fn the_now_playing_bar_shows_balance_and_swap_only_when_set() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    let bar = |app: &App| {
+        let (_, backend) = render(app, 100, 24);
+        screen_rows(&backend)
+            .into_iter()
+            .find(|row| row.contains("队列0"))
+            .unwrap()
+    };
+    assert!(bar(&app).contains("播完停止·100%·队列0"));
+
+    app.dispatch(Action::ShiftBalance(30));
+    app.dispatch(Action::ToggleChannelSwap);
+    assert!(bar(&app).contains("播完停止·100%·偏右30·左右互换·队列0"));
+    app.dispatch(Action::ShiftBalance(-60));
+    assert!(bar(&app).contains("100%·偏左30·左右互换·队列0"));
 }
 
 #[test]

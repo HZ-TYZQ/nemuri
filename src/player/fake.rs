@@ -19,6 +19,7 @@ struct FakeState {
     volume: u8,
     muted: bool,
     fade_gain: f32,
+    channel_mix: ChannelMix,
     output_down: bool,
     recovering: bool,
     events: Vec<PlayerEvent>,
@@ -41,6 +42,7 @@ impl FakeBackend {
             volume: 100,
             muted: false,
             fade_gain: 1.0,
+            channel_mix: ChannelMix::default(),
             output_down: false,
             recovering: false,
             events: Vec::new(),
@@ -72,6 +74,11 @@ impl FakeControl {
     /// 睡眠定时最近一次设置的淡出增益。
     pub(crate) fn fade_gain(&self) -> f32 {
         self.0.borrow().fade_gain
+    }
+
+    /// 最近一次设置的左右平衡与声道互换。
+    pub(crate) fn channel_mix(&self) -> ChannelMix {
+        self.0.borrow().channel_mix
     }
 
     /// 当前曲目自然播完。
@@ -185,7 +192,9 @@ impl PlaybackBackend for FakeBackend {
         self.shared.borrow_mut().fade_gain = gain;
     }
 
-    fn set_channel_mix(&mut self, _mix: ChannelMix) {}
+    fn set_channel_mix(&mut self, mix: ChannelMix) {
+        self.shared.borrow_mut().channel_mix = mix;
+    }
 
     fn set_spectrum_enabled(&mut self, _enabled: bool) {}
 

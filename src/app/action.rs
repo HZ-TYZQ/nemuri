@@ -35,6 +35,9 @@ pub enum Action {
     /// 系统媒体控制设定音量；大于 0 时顺带取消静音。
     SetVolume(u8),
     ToggleMute,
+    /// 平衡往右（正）或往左（负）挪，限制在 -100–100。
+    ShiftBalance(i8),
+    ToggleChannelSwap,
     CycleRepeat,
     SetRepeat(RepeatMode),
     ToggleShuffle,
@@ -131,6 +134,8 @@ impl App {
                 self.config.volume = volume;
             }
             Action::ToggleMute => self.toggle_mute(),
+            Action::ShiftBalance(delta) => self.shift_balance(delta),
+            Action::ToggleChannelSwap => self.toggle_channel_swap(),
             Action::CycleRepeat => self.cycle_repeat(),
             Action::SetRepeat(repeat) => self.set_repeat(repeat),
             Action::ToggleShuffle => self.toggle_shuffle(),

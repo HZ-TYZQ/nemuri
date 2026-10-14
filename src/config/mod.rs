@@ -70,6 +70,10 @@ pub struct AppConfig {
     pub muted: bool,
     pub repeat: RepeatMode,
     pub shuffle: bool,
+    /// 左右平衡，-100（只有左声道）到 100（只有右声道），0 居中。
+    pub balance: i8,
+    /// 左右声道互换。
+    pub swap_channels: bool,
     pub sort: SortOrder,
     pub visualizer_enabled: bool,
     pub mouse_enabled: bool,
@@ -90,6 +94,8 @@ impl Default for AppConfig {
             muted: false,
             repeat: RepeatMode::Stop,
             shuffle: false,
+            balance: 0,
+            swap_channels: false,
             sort: SortOrder::default(),
             visualizer_enabled: true,
             mouse_enabled: true,

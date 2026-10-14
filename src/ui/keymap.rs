@@ -12,6 +12,7 @@ use super::ViewLayout;
 
 const SHORT_SEEK_MICROS: i64 = 10_000_000;
 const LONG_SEEK_MICROS: i64 = 60_000_000;
+const BALANCE_STEP: i8 = 10;
 /// 帮助弹层里说明文字开始的列。
 const HELP_KEY_COLUMN: usize = 15;
 
@@ -162,6 +163,15 @@ pub(super) const LIBRARY: &[Binding] = &[
         ],
     ),
     listed("m", "静音", &[(ch('m'), Action::ToggleMute)]),
+    listed(
+        ", / . · w",
+        "左右平衡 ±10 / 互换左右声道",
+        &[
+            (ch(','), Action::ShiftBalance(-BALANCE_STEP)),
+            (ch('.'), Action::ShiftBalance(BALANCE_STEP)),
+            (ch('w'), Action::ToggleChannelSwap),
+        ],
+    ),
     listed(
         "n / p",
         "下一首 / 上一首历史",

@@ -26,6 +26,10 @@ playback {{
     // 循环："stop" 播完停止、"none" 顺序播放、"all" 列表循环、"one" 单曲循环
     repeat "{repeat}"
     shuffle {shuffle}
+    // 左右平衡（, / .）：-100 只有左声道，100 只有右声道，0 居中
+    balance {balance}
+    // 互换左右声道（w），耳机戴反时用
+    swap-channels {swap_channels}
 }}
 
 // 曲库排序："path"、"title"、"artist"、"album" 或 "duration"
@@ -63,6 +67,8 @@ theme {{
         muted = flag(config.muted),
         repeat = repeat_name(config.repeat),
         shuffle = flag(config.shuffle),
+        balance = config.balance,
+        swap_channels = flag(config.swap_channels),
         sort = sort_key_name(config.sort.key),
         descending = flag(config.sort.descending),
         visualizer = flag(config.visualizer_enabled),
@@ -92,6 +98,8 @@ mod tests {
                 muted: true,
                 repeat: RepeatMode::All,
                 shuffle: true,
+                balance: 70,
+                swap_channels: true,
                 sort: SortOrder {
                     key: SortKey::Duration,
                     descending: true,

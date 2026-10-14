@@ -70,10 +70,18 @@ pub(super) fn draw_now_playing(
     } else {
         ""
     };
+    // 平衡和互换只在不是默认时显示，免得忘了上次调过。
+    let mut channels = match app.config().balance {
+        0 => String::new(),
+        balance if balance > 0 => format!(" · 偏右 {balance}"),
+        balance => format!(" · 偏左 {}", balance.unsigned_abs()),
+    };
+    if app.config().swap_channels {
+        channels.push_str(" · 左右互换");
+    }
     let status = format!(
-        "{sleep}{privacy}{} · {} · 队列 {}",
+        "{sleep}{privacy}{} · {volume}{channels} · 队列 {}",
         app.playback_mode().label(),
-        volume,
         app.playback().queue.len()
     );
     let status_width = (UnicodeWidthStr::width(status.as_str()) as u16).max(38);

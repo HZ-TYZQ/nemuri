@@ -117,6 +117,7 @@ impl App {
     ) -> Result<Self, String> {
         player.set_volume(config.volume);
         player.set_muted(config.muted);
+        player.set_channel_mix(playback::channel_mix(&config));
         player.set_spectrum_enabled(config.visualizer_enabled);
         let playlists = PlaylistStore::load(paths.playlists_dir.clone())
             .map_err(|error| format!("无法打开播放列表目录: {error}"))?;

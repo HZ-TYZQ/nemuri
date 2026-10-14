@@ -14,6 +14,7 @@ use kdl::{
 };
 use ratatui::style::Color;
 
+use crate::player::MAX_BALANCE;
 use crate::theme::{PRESET_NAMES, Theme};
 use crate::track::{RepeatMode, SortKey, SortOrder};
 
@@ -200,6 +201,12 @@ impl Reader<'_> {
                     }
                 }
                 "shuffle" => self.flag(node, &mut config.shuffle),
+                "balance" => {
+                    if let Some(balance) = self.balance(node) {
+                        config.balance = balance;
+                    }
+                }
+                "swap-channels" => self.flag(node, &mut config.swap_channels),
                 _ => self.unknown(node),
             }
         }
@@ -372,6 +379,23 @@ impl Reader<'_> {
         volume
     }
 
+    fn balance(&mut self, node: &KdlNode) -> Option<i8> {
+        let entry = self.argument(node)?;
+        let balance = match entry.value() {
+            KdlValue::Integer(value) => i8::try_from(*value)
+                .ok()
+                .filter(|balance| (-MAX_BALANCE..=MAX_BALANCE).contains(balance)),
+            _ => None,
+        };
+        if balance.is_none() {
+            self.problem(
+                node,
+                format_args!("balance 的值 {} 应为 -100–100 的整数，已忽略", shown(entry)),
+            );
+        }
+        balance
+    }
+
     fn choice<T: Copy>(&mut self, node: &KdlNode, choices: &[(&str, T)]) -> Option<T> {
         let value = self.string(node)?;
         let found = choices
@@ -464,6 +488,18 @@ fn edits(start: &AppConfig, now: &AppConfig) -> Vec<Edit> {
         "playback",
         "shuffle",
         now.shuffle.into(),
+    );
+    child(
+        start.balance != now.balance,
+        "playback",
+        "balance",
+        i128::from(now.balance).into(),
+    );
+    child(
+        start.swap_channels != now.swap_channels,
+        "playback",
+        "swap-channels",
+        now.swap_channels.into(),
     );
     child(
         start.visualizer_enabled != now.visualizer_enabled,
@@ -779,6 +815,8 @@ mod tests {
                 muted #true
                 repeat "one"
                 shuffle #true
+                balance -30
+                swap-channels #true
             }
             sort "album" descending=#true
             interface {
@@ -807,6 +845,8 @@ mod tests {
                 muted: true,
                 repeat: RepeatMode::One,
                 shuffle: true,
+                balance: -30,
+                swap_channels: true,
                 sort: SortOrder {
                     key: SortKey::Album,
                     descending: true,
@@ -972,6 +1012,35 @@ mod tests {
         assert_eq!(updated, "// 只有注释\nplayback {\n    muted #true\n}\n");
         let updated = changed("", |config| config.muted = true);
         assert_eq!(updated, "playback {\n    muted #true\n}\n");
+    }
+
+    #[test]
+    fn the_balance_accepts_minus_one_hundred_to_one_hundred() {
+        let balance = |text: &str| read(&format!("playback {{\n    balance {text}\n}}\n"));
+        assert_eq!(balance("-100").config.balance, -100);
+        assert_eq!(balance("100").config.balance, 100);
+        for wrong in ["101", "-128", "0.5", "#true"] {
+            let loaded = balance(wrong);
+            assert_eq!(loaded.config.balance, 0, "{wrong}");
+            assert_eq!(
+                loaded.message.unwrap(),
+                format!(
+                    "config.kdl 有误: 第 2 行 balance 的值 {wrong} 应为 -100–100 的整数，已忽略"
+                ),
+            );
+        }
+    }
+
+    #[test]
+    fn balance_and_swap_are_written_back_into_the_playback_block() {
+        let updated = changed("playback {\n    volume 60\n}\n", |config| {
+            config.balance = -20;
+            config.swap_channels = true;
+        });
+        assert_eq!(
+            updated,
+            "playback {\n    volume 60\n    balance -20\n    swap-channels #true\n}\n"
+        );
     }
 
     #[test]

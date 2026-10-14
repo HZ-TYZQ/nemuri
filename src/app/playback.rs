@@ -3,7 +3,8 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::player::PlayState;
+use crate::config::AppConfig;
+use crate::player::{ChannelMix, MAX_BALANCE, PlayState};
 use crate::track::{PlaybackMode, RepeatMode, fmt_duration};
 
 use super::{App, BagUpdate};
@@ -40,6 +41,14 @@ pub(super) fn short_reason(error: &str, path: &Path) -> String {
         .trim_end_matches(':')
         .trim_end()
         .to_owned()
+}
+
+/// 配置里的平衡和互换，交给播放后端的样子。
+pub(super) fn channel_mix(config: &AppConfig) -> ChannelMix {
+    ChannelMix {
+        balance: config.balance,
+        swapped: config.swap_channels,
+    }
 }
 
 fn file_label(path: &Path) -> String {
@@ -319,6 +328,43 @@ impl App {
         self.playback.player.set_volume(volume);
         self.config.volume = volume;
         self.view.message = Some(format!("音量 {volume}%"));
+    }
+
+    /// `,` / `.`：平衡往左或往右挪，到头为止。
+    pub(super) fn shift_balance(&mut self, delta: i8) {
+        let balance = self
+            .config
+            .balance
+            .saturating_add(delta)
+            .clamp(-MAX_BALANCE, MAX_BALANCE);
+        self.config.balance = balance;
+        self.playback
+            .player
+            .set_channel_mix(channel_mix(&self.config));
+        self.view.message = Some(match balance {
+            0 => "平衡：居中".to_owned(),
+            1.. => format!("平衡：偏右 {balance}（左声道 {}%）", 100 - balance),
+            _ => format!(
+                "平衡：偏左 {}（右声道 {}%）",
+                balance.unsigned_abs(),
+                100 + balance
+            ),
+        });
+    }
+
+    pub(super) fn toggle_channel_swap(&mut self) {
+        self.config.swap_channels = !self.config.swap_channels;
+        self.playback
+            .player
+            .set_channel_mix(channel_mix(&self.config));
+        self.view.message = Some(
+            if self.config.swap_channels {
+                "已互换左右声道"
+            } else {
+                "左右声道已恢复"
+            }
+            .to_owned(),
+        );
     }
 
     pub(super) fn toggle_mute(&mut self) {
