@@ -58,8 +58,11 @@ fn copy_into_place(old: &Path, new: &Path) -> io::Result<()> {
 }
 
 /// 递归复制目录。符号链接按它指向的内容复制，程序自己从不在这里创建链接。
+///
+/// 各级目录保持源目录的权限：先建成只有自己能访问的目录，内容复制完再改成源目录的权限，
+/// 复制途中和复制之后都不会比原来更开放。文件的权限由 `fs::copy` 一并复制。
 fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
-    fs::create_dir(to)?;
+    create_private_dir(to)?;
     for entry in fs::read_dir(from)? {
         let entry = entry?;
         let source = entry.path();
@@ -70,7 +73,19 @@ fn copy_tree(from: &Path, to: &Path) -> io::Result<()> {
             fs::copy(&source, &target)?;
         }
     }
-    Ok(())
+    fs::set_permissions(to, fs::metadata(from)?.permissions())
+}
+
+#[cfg(unix)]
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    fs::DirBuilder::new().mode(0o700).create(path)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(path: &Path) -> io::Result<()> {
+    fs::create_dir(path)
 }
 
 #[cfg(test)]
@@ -228,6 +243,47 @@ mod tests {
         assert!(!root.join("data/nemuri").exists());
         assert!(!root.join("data/nemuri.migrating").exists());
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copied_folders_keep_their_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        seed_previous(root);
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let set_mode = |path: &Path, mode: u32| {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        };
+        // 私有的数据目录和子目录，以及一个普通的配置目录和一个私有文件。
+        let old_data = root.join("data/tui-music-player");
+        set_mode(&old_data, 0o700);
+        set_mode(&old_data.join("playlists"), 0o700);
+        set_mode(&old_data.join("session.toml"), 0o600);
+        set_mode(&root.join("config/tui-music-player"), 0o755);
+        let paths = linux_paths(root);
+
+        adopt_previous_dirs(&paths).unwrap();
+        assert_eq!(mode(&root.join("data/nemuri")), 0o700, "data/nemuri");
+        assert_eq!(mode(&paths.playlists_dir), 0o700, "playlists");
+        assert_eq!(mode(&paths.session_file), 0o600, "session.toml");
+        assert_eq!(mode(&root.join("config/nemuri")), 0o755, "config/nemuri");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folders_are_private_while_they_are_being_copied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("staging");
+        create_private_dir(&path).unwrap();
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
     }
 
     #[test]
