@@ -99,9 +99,24 @@ impl Lyrics {
         })
     }
 
-    /// 能按 LRC 解析就是同步歌词，否则当作纯文本。
+    /// 能按 LRC 解析就是同步歌词，否则当作纯文本；只是占位文字时返回 None。
+    /// 带时间标签的占位文字不再退回纯文本，免得连时间标签一起显示出来。
     fn parse_any(text: &str) -> Option<Self> {
-        Self::parse(text).or_else(|| Self::parse_plain(text))
+        Self::parse(text)
+            .or_else(|| Self::parse_plain(text))
+            .filter(|lyrics| !lyrics.is_placeholder())
+    }
+
+    /// 每一行有字的歌词都是“纯音乐”“暂无歌词”这类占位文字：
+    /// 音乐平台给没有歌词的曲目填上一句，下载的文件常把它带进标签。
+    fn is_placeholder(&self) -> bool {
+        let mut texts = self
+            .lines
+            .iter()
+            .map(|line| placeholder_key(&line.text))
+            .filter(|key| !key.is_empty())
+            .peekable();
+        texts.peek().is_some() && texts.all(|key| PLACEHOLDERS.contains(&key.as_str()))
     }
 
     pub fn lines(&self) -> &[LyricLine] {
@@ -144,6 +159,26 @@ impl Lyrics {
             (lyrics, _) => Ok(lyrics),
         }
     }
+}
+
+/// 占位歌词按 [`placeholder_key`] 处理后的样子。
+const PLACEHOLDERS: [&str; 8] = [
+    "纯音乐",
+    "純音樂",
+    "纯音乐请欣赏",
+    "纯音乐请您欣赏",
+    "此歌曲为没有填词的纯音乐请您欣赏",
+    "暂无歌词",
+    "暫無歌詞",
+    "instrumental",
+];
+
+/// 只留文字和数字并转成小写：标点、空格和括号的写法各不相同，`[Instrumental]` 也能认出。
+fn placeholder_key(text: &str) -> String {
+    text.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// 整行只是一个 `[ti:…]`、`[ar:…]`、`[offset:…]` 之类的 LRC 元数据标签。
@@ -240,7 +275,7 @@ fn decode(bytes: &[u8]) -> Option<String> {
 }
 
 /// 内嵌歌词放在 LYRICS / USLT / ©lyr 里，可能是 LRC 文本，也可能是纯文本；
-/// 任何一处有同步歌词就用它，否则用第一段纯文本。
+/// 任何一处有同步歌词就用它，否则用第一段纯文本。占位文字不算歌词。
 fn embedded(track: &Path) -> Option<Lyrics> {
     let tagged = Probe::open(track)
         .ok()?
@@ -257,10 +292,12 @@ fn embedded(track: &Path) -> Option<Lyrics> {
                 .filter_map(|key| tag.get_string(key))
         })
         .collect();
-    texts
+    let parsed: Vec<Lyrics> = texts
         .iter()
-        .find_map(|text| Lyrics::parse(text))
-        .or_else(|| texts.iter().find_map(|text| Lyrics::parse_plain(text)))
+        .filter_map(|text| Lyrics::parse_any(text))
+        .collect();
+    let chosen = parsed.iter().position(Lyrics::is_synced).unwrap_or(0);
+    parsed.into_iter().nth(chosen)
 }
 
 fn file_label(path: &Path) -> String {
@@ -459,6 +496,36 @@ mod tests {
         write_wav_with_lyrics(&track, Some("内嵌纯文本"));
         fs::write(&sidecar, "旁边纯文本").unwrap();
         assert_eq!(first_line(&track), (false, "旁边纯文本".to_owned()));
+    }
+
+    #[test]
+    fn placeholder_lyrics_are_not_lyrics() {
+        for text in [
+            "纯音乐",
+            "[00:00.00]纯音乐，请欣赏",
+            "[00:00.000] 此歌曲为没有填词的纯音乐，请您欣赏\n[00:05.00]",
+            "[Instrumental]",
+            "\n 暂无歌词 \n\n",
+        ] {
+            assert_eq!(Lyrics::parse_any(text), None, "{text:?}");
+        }
+        // 只是提到“纯音乐”的歌词照常显示。
+        let lyrics = Lyrics::parse_any("纯音乐\n这一段是真的歌词").unwrap();
+        assert_eq!(lyrics.lines().len(), 2);
+        assert!(Lyrics::parse_any("[00:01.00]纯音乐时间").is_some());
+    }
+
+    #[test]
+    fn placeholder_lyrics_fall_through_to_the_next_source() {
+        let temp = tempfile::tempdir().unwrap();
+        let track = temp.path().join("歌.wav");
+        write_wav_with_lyrics(&track, Some("纯音乐"));
+        assert_eq!(Lyrics::load_for(&track), Ok(None));
+
+        // 旁边的 .lrc 是占位文字时改用内嵌的真歌词。
+        write_wav_with_lyrics(&track, Some("内嵌纯文本"));
+        fs::write(temp.path().join("歌.lrc"), "[00:00.00]纯音乐，请欣赏").unwrap();
+        assert_eq!(first_line(&track), (false, "内嵌纯文本".to_owned()));
     }
 
     #[test]
