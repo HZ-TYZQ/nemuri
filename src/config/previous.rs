@@ -44,17 +44,45 @@ fn copy_into_place(old: &Path, new: &Path) -> io::Result<()> {
     let mut staging = new.as_os_str().to_owned();
     staging.push(".migrating");
     let staging = Path::new(&staging);
-    if staging.exists() {
-        fs::remove_dir_all(staging)?;
+    if fs::symlink_metadata(staging).is_ok() {
+        remove_staging(staging)?;
     }
     if let Some(parent) = new.parent() {
         fs::create_dir_all(parent)?;
     }
     let result = copy_tree(old, staging).and_then(|()| fs::rename(staging, new));
     if result.is_err() {
-        let _ = fs::remove_dir_all(staging);
+        // 删不掉也不要紧：下次启动会再删一次，而复制失败的原因更值得报告。
+        let _ = remove_staging(staging);
     }
     result
+}
+
+/// 删掉复制到一半的临时目录。它照旧目录复制了权限，可能有只读的目录；在 Unix 上
+/// 直接递归删除会因为没有写权限而失败。这棵树是迁移自己建的，先让各级目录可写再删。
+/// Windows 上标准库删除时不理会只读属性，不用先处理。
+fn remove_staging(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    make_dirs_writable(path)?;
+    fs::remove_dir_all(path)
+}
+
+#[cfg(unix)]
+fn make_dirs_writable(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    // 文件能不能删只看所在目录；符号链接不跟进去。
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(());
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(permissions.mode() | 0o700);
+    fs::set_permissions(path, permissions)?;
+    for entry in fs::read_dir(path)? {
+        make_dirs_writable(&entry?.path())?;
+    }
+    Ok(())
 }
 
 /// 递归复制目录。符号链接按它指向的内容复制，程序自己从不在这里创建链接。
@@ -284,6 +312,51 @@ mod tests {
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o700
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_interrupted_copy_of_a_read_only_folder_starts_over() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        seed_previous(root);
+        let old_config = root.join("config/tui-music-player");
+        let set_mode = |path: &Path, mode: u32| {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        };
+        set_mode(&old_config, 0o500);
+        // 上次复制完了、还没改名就退出了：临时目录照旧目录的权限变成 0500。
+        copy_tree(&old_config, &root.join("config/nemuri.migrating")).unwrap();
+        let paths = linux_paths(root);
+
+        let result = adopt_previous_dirs(&paths);
+        set_mode(&old_config, 0o755);
+        assert!(result.unwrap().is_some());
+        assert!(paths.config_file.exists());
+        assert!(!root.join("config/nemuri.migrating").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_staging_tree_with_read_only_folders_is_removed() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let staging = temp.path().join("nemuri.migrating");
+        write(&staging.join("playlists/夜里.json"), "{}");
+        write(&staging.join("config.kdl"), "");
+        for (path, mode) in [
+            (staging.join("playlists/夜里.json"), 0o400),
+            (staging.join("playlists"), 0o500),
+            (staging.clone(), 0o500),
+        ] {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+
+        remove_staging(&staging).unwrap();
+        assert!(!staging.exists());
     }
 
     #[test]
