@@ -8,6 +8,8 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, App, Overlay};
 
+use super::ViewLayout;
+
 const SHORT_SEEK_MICROS: i64 = 10_000_000;
 const LONG_SEEK_MICROS: i64 = 60_000_000;
 /// 帮助弹层里说明文字开始的列。
@@ -248,11 +250,14 @@ pub(super) const SEARCH: &[Binding] = &[
     ]),
 ];
 
-pub(super) const HELP: &[Binding] = &[listed(
-    "? / Esc",
-    "关闭",
-    &[(ch('?'), Action::Back), (code(KeyCode::Esc), Action::Back)],
-)];
+pub(super) const HELP: &[Binding] = &[
+    hidden(CURSOR),
+    listed(
+        "? / Esc",
+        "关闭",
+        &[(ch('?'), Action::Back), (code(KeyCode::Esc), Action::Back)],
+    ),
+];
 
 pub(super) const PLAYLISTS: &[Binding] = &[
     hidden(CURSOR),
@@ -360,9 +365,14 @@ fn bindings_for(app: &App) -> (&'static [Binding], bool) {
 }
 
 /// 这次按键在当前焦点下对应的操作；没有绑定时为 None。
-pub fn key_action(app: &App, event: KeyEvent) -> Option<Action> {
+/// `view` 是上一帧的布局：帮助弹层滚到底以后不再往下滚。
+pub fn key_action(app: &App, view: &ViewLayout, event: KeyEvent) -> Option<Action> {
     let (bindings, text_input) = bindings_for(app);
-    lookup(bindings, text_input, event)
+    lookup(bindings, text_input, event).filter(|action| {
+        !(app.view().overlay == Overlay::Help
+            && *action == Action::CursorDown
+            && view.help_room(app) == 0)
+    })
 }
 
 pub(super) fn lookup(bindings: &[Binding], text_input: bool, event: KeyEvent) -> Option<Action> {

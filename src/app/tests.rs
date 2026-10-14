@@ -66,8 +66,14 @@ fn track(path: PathBuf) -> Track {
 }
 
 /// 按一次键：经按键表翻译成 Action 再分派，与主循环相同。
+/// 没有画过的布局只影响帮助弹层的滚动，滚动的测试用 `press_in`。
 fn press(app: &mut App, key: KeyEvent) {
-    if let Some(action) = crate::ui::key_action(app, key) {
+    press_in(app, &ViewLayout::default(), key);
+}
+
+/// 按上一帧的布局按一次键。
+fn press_in(app: &mut App, view: &ViewLayout, key: KeyEvent) {
+    if let Some(action) = crate::ui::key_action(app, view, key) {
         app.dispatch(action);
     }
 }
@@ -428,6 +434,73 @@ fn visualizer_key_does_not_escape_search_or_overlay_modes() {
     );
     assert!(app.config.visualizer_enabled);
     assert_eq!(app.view.overlay, Overlay::Help);
+}
+
+/// 帮助弹层所在的各行：去掉最后一行底栏，底栏的提示里也有“q 退出”。
+fn popup_text(backend: &ratatui::backend::TestBackend) -> String {
+    let rows = screen_rows(backend);
+    rows[..rows.len() - 1].join("\n")
+}
+
+#[test]
+fn the_help_scrolls_on_a_short_terminal_and_stops_at_the_end() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+    press(&mut app, key(KeyCode::Char('?')));
+    assert_eq!(app.view.overlay, Overlay::Help);
+
+    // 24 行的终端放不下全部帮助，最后一行起初看不到。
+    let (view, backend) = render(&app, 80, 24);
+    let max = view.help_max_scroll;
+    assert!(max > 0);
+    assert!(!popup_text(&backend).contains("q退出"));
+    assert!(popup_text(&backend).contains(&format!("↑↓滚动·下面还有{max}行")));
+
+    for _ in 0..max {
+        let (view, _) = render(&app, 80, 24);
+        press_in(&mut app, &view, key(KeyCode::Char('j')));
+    }
+    let (view, backend) = render(&app, 80, 24);
+    assert!(popup_text(&backend).contains("q退出"));
+    assert!(popup_text(&backend).contains("↑↓滚动·已到末尾"));
+
+    // 到底以后再按也不往下滚，往上按一下就能回去。
+    press_in(&mut app, &view, key(KeyCode::Down));
+    assert_eq!(app.view.help_scroll, max);
+    press_in(&mut app, &view, key(KeyCode::Char('k')));
+    assert_eq!(app.view.help_scroll, max - 1);
+
+    // 关掉再打开从头开始；滚轮也只滚到底为止。
+    press(&mut app, key(KeyCode::Esc));
+    press(&mut app, key(KeyCode::Char('?')));
+    assert_eq!(app.view.help_scroll, 0);
+    let (view, _) = render(&app, 80, 24);
+    let wheel = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 40,
+        row: 12,
+        modifiers: KeyModifiers::NONE,
+    };
+    for _ in 0..3 {
+        mouse(&mut app, &mut MouseInput::default(), wheel, &view);
+    }
+    assert_eq!(app.view.help_scroll, max);
+}
+
+#[test]
+fn the_help_fits_a_tall_terminal_without_scrolling() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.dispatch(Action::OpenOverlay(Overlay::Help));
+    let (view, backend) = render(&app, 80, 40);
+    assert_eq!(view.help_max_scroll, 0);
+    assert!(popup_text(&backend).contains("q退出"));
+    assert!(!popup_text(&backend).contains("滚动"));
+    press_in(
+        &mut app,
+        &view,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    );
+    assert_eq!(app.view.help_scroll, 0);
 }
 
 #[test]

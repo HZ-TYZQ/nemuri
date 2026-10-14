@@ -445,7 +445,11 @@ fn generated_hints_keep_the_overlay_wording() {
 #[test]
 fn help_lines_align_their_descriptions() {
     let lines = keymap::help_lines();
-    assert_eq!(lines.len(), 22, "帮助弹层按 22 行设计高度");
+    assert_eq!(
+        lines.len(),
+        22,
+        "帮助行数变了：README 和手册页的按键表也要跟着改"
+    );
     for (line, binding) in lines
         .iter()
         .zip(LIBRARY.iter().filter(|b| !b.keys.is_empty()))

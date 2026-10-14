@@ -15,7 +15,7 @@ mod tests;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, ListState, Paragraph};
 
-use crate::app::App;
+use crate::app::{App, Overlay};
 use crate::theme::Theme;
 
 pub use keymap::key_action;
@@ -37,6 +37,19 @@ pub struct ViewLayout {
     /// 同一时刻只会有一个列表型弹层可见，所以共用一份。
     pub(crate) overlay: ListView,
     pub(crate) progress: Option<Rect>,
+    /// 帮助弹层最多能往下滚几行；没有显示帮助或放得下时为 0。
+    pub(crate) help_max_scroll: usize,
+}
+
+impl ViewLayout {
+    /// 帮助弹层还能往下滚几行。到底以后按键和滚轮都不再往下滚，
+    /// 否则 App 里的偏移会越过末尾，往回滚时要先空按几下。
+    pub(crate) fn help_room(&self, app: &App) -> usize {
+        if app.view().overlay != Overlay::Help {
+            return 0;
+        }
+        self.help_max_scroll.saturating_sub(app.view().help_scroll)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -93,6 +106,7 @@ impl ListView {
 pub fn draw(frame: &mut Frame, app: &App, view: &mut ViewLayout) {
     let theme = &app.config().theme;
     let area = frame.area();
+    view.help_max_scroll = 0;
     if area.width < 42 || area.height < 12 {
         // 这一帧什么列表都没画，命中测试必须失效，否则会用上一帧的坐标误判。
         view.library.clear();
@@ -139,7 +153,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &mut ViewLayout) {
         view.progress = draw_now_playing(frame, app, chunks[2], theme, pane);
         draw_footer(frame, app, chunks[3], theme);
     }
-    draw_overlay(frame, app, theme, &mut view.overlay);
+    draw_overlay(frame, app, theme, view);
 }
 
 /// 曲库，以及开启歌词时宽终端下它右侧的歌词面板。返回是否画了歌词面板。

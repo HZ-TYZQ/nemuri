@@ -154,6 +154,10 @@ impl App {
             Action::Enqueue => self.enqueue_selected(false),
             Action::EnqueueNext => self.enqueue_selected(true),
             Action::OpenOverlay(Overlay::Folders) => self.open_folders(),
+            Action::OpenOverlay(Overlay::Help) => {
+                self.view.help_scroll = 0;
+                self.view.overlay = Overlay::Help;
+            }
             Action::OpenOverlay(overlay) => self.view.overlay = overlay,
             Action::CursorDown => self.move_cursor(1),
             Action::CursorUp => self.move_cursor(-1),
@@ -213,7 +217,11 @@ impl App {
                 self.view.folder_selected =
                     step(self.view.folder_selected, self.catalog.folders().len() + 1);
             }
-            Overlay::Help | Overlay::NameInput | Overlay::DeleteConfirm => {}
+            // 只有界面知道弹层多高，往下滚到底时由它不再发出 CursorDown。
+            Overlay::Help => {
+                self.view.help_scroll = self.view.help_scroll.saturating_add_signed(delta);
+            }
+            Overlay::NameInput | Overlay::DeleteConfirm => {}
         }
     }
 

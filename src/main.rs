@@ -113,7 +113,7 @@ fn run(
         if event::poll(Duration::from_millis(poll_ms))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    if let Some(action) = ui::key_action(app, key) {
+                    if let Some(action) = ui::key_action(app, &view, key) {
                         app.dispatch(action);
                     }
                 }

@@ -11,13 +11,14 @@ use crate::app::{App, Overlay};
 use crate::theme::Theme;
 use crate::track::Track;
 
-use super::ListView;
 use super::keymap::{
     self, DELETE_CONFIRM, FOLDERS, HELP, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS, QUEUE,
 };
 use super::text::{fmt_duration, now_playing_text, truncate_display};
+use super::{ListView, ViewLayout};
 
-pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
+pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: &mut ViewLayout) {
+    let view = &mut layout.overlay;
     // 非列表型弹层没有可点击的行；先失效，命中测试才不会用上一帧的坐标。
     if !matches!(
         app.view().overlay,
@@ -27,17 +28,7 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, view: &m
     }
     match app.view().overlay {
         Overlay::None => {}
-        Overlay::Help => {
-            let lines = keymap::help_lines();
-            draw_text_popup(
-                frame,
-                &format!(" 快捷键帮助 · {} ", keymap::hints(HELP)),
-                lines.iter().map(String::as_str).collect(),
-                62,
-                lines.len() as u16 + 2,
-                theme,
-            );
-        }
+        Overlay::Help => layout.help_max_scroll = draw_help(frame, app, theme, view),
         Overlay::Playlists => draw_playlists(frame, app, theme, view),
         Overlay::Queue => draw_queue(frame, app, theme, view),
         Overlay::PlaylistTracks => draw_playlist_tracks(frame, app, theme, view),
@@ -373,6 +364,49 @@ fn draw_text_popup(
             ),
         area,
     );
+}
+
+/// 帮助弹层。终端不够高时可以滚动，底边提示下面还有几行。
+/// 行按宽度截断而不折行，滚动偏移才和行数一一对应。返回最多能往下滚几行。
+fn draw_help(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) -> usize {
+    let lines = keymap::help_lines();
+    let area = centered(frame.area(), 62, lines.len() as u16 + 2);
+    let mut block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(theme.border))
+        .title(Span::styled(
+            format!(" 快捷键帮助 · {} ", keymap::hints(HELP)),
+            Style::new().fg(theme.primary).bold(),
+        ));
+    let inner = block.inner(area);
+    let max_scroll = lines.len().saturating_sub(usize::from(inner.height));
+    let offset = app.view().help_scroll.min(max_scroll);
+    if max_scroll > 0 {
+        let below = max_scroll - offset;
+        let note = if below > 0 {
+            format!(" ↑↓ 滚动 · 下面还有 {below} 行 ")
+        } else {
+            " ↑↓ 滚动 · 已到末尾 ".to_owned()
+        };
+        block =
+            block.title_bottom(Line::styled(note, Style::new().fg(theme.muted)).right_aligned());
+    }
+    let width = usize::from(inner.width);
+    let text: Vec<Line> = lines
+        .iter()
+        .skip(offset)
+        .map(|line| Line::raw(truncate_display(line, width)))
+        .collect();
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(text)
+            .style(Style::new().fg(theme.primary))
+            .block(block),
+        area,
+    );
+    // 没有可点的行，记下区域只是为了让滚轮在弹层上生效。
+    view.record(inner, 0);
+    max_scroll
 }
 
 /// 弹层内容区，以及扣掉底部提示行之后真正留给列表的视口。

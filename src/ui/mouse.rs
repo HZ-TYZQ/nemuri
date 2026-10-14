@@ -34,7 +34,12 @@ impl MouseInput {
                 vec![Action::CursorUp; SCROLL_STEP]
             }
             MouseEventKind::ScrollDown if hovers_focused_list(column, row, view, app) => {
-                vec![Action::CursorDown; SCROLL_STEP]
+                let steps = if app.view().overlay == Overlay::Help {
+                    SCROLL_STEP.min(view.help_room(app))
+                } else {
+                    SCROLL_STEP
+                };
+                vec![Action::CursorDown; steps]
             }
             _ => Vec::new(),
         }

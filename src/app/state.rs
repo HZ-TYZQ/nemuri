@@ -64,6 +64,8 @@ pub struct ViewState {
     pub(crate) queue_selected: usize,
     /// 文件夹面板的光标：第 0 行是“全部”，之后依次是各个文件夹。
     pub(crate) folder_selected: usize,
+    /// 帮助弹层往下滚了几行。终端够高时界面不使用它。
+    pub(crate) help_scroll: usize,
     /// 新建播放列表时输入的名称。
     pub(crate) name_input: String,
     /// 底栏显示的一行提示。
