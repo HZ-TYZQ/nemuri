@@ -176,7 +176,7 @@ jobs:
           find . -type f ! -name SHA256SUMS.txt -print0 \
             | sort -z \
             | xargs -0 sha256sum \
-            | sed 's#  \./#  #' > SHA256SUMS.txt
+            | sed 's#  .*/#  #' > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v3
         with:
