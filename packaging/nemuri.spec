@@ -1,5 +1,5 @@
 Name:           nemuri
-Version:        2.0.0
+Version:        2.2.0
 Release:        1%{?dist}
 Summary:        Terminal player for ASMR and music
 
@@ -61,6 +61,19 @@ install -Dpm 0644 assets/icons/%{name}-48.png %{buildroot}%{_datadir}/icons/hico
 %{_datadir}/icons/hicolor/48x48/apps/%{name}.png
 
 %changelog
+* Sat Oct 17 2026 HZ-TYZQ - 2.2.0-1
+- Add jump marks to long recordings, with a panel to jump to, rename,
+  and delete them
+- Let a jump mark be a recording's start or end point to skip intros
+  and outros
+- Add clip playlists whose entries are whole tracks or sections taken
+  from jump marks, played in their own time
+- Play a playlist as its own scope with its own repeat mode, and edit
+  entries, their names, and their ranges in place
+- Store playlists in a new format that follows renamed files
+- Keep progress, mark, and playlist files that cannot be read, and retry
+  playlist changes that could not be saved
+
 * Wed Oct 14 2026 HZ-TYZQ - 2.0.0-1
 - Rename Music Player to Nemuri and migrate settings and user data
 - Replace the old music-player RPM on upgrade
@@ -95,7 +108,7 @@ install -Dpm 0644 assets/icons/%{name}-48.png %{buildroot}%{_datadir}/icons/hico
 - Preserve playback on audio output failure and allow manual recovery
 - Refresh playback action symbols
 
-* Sun Sep 07 2026 HZ-TYZQ - 1.3.0-1
+* Mon Sep 07 2026 HZ-TYZQ - 1.3.0-1
 - Add a play queue panel with jump-to, remove, reorder and clear
 - Sort the library by path, title, artist, album or duration in either direction
 - Read track and disc numbers so album order follows the album itself
