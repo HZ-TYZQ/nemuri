@@ -14,9 +14,11 @@ use std::time::Duration;
 
 use crate::marks::{self, AddError, Bounds, Mark, MarkStore, Role, RoleError};
 use crate::player::PlayState;
+use crate::playlist::Range;
 use crate::progress;
 use crate::track::{Track, fmt_duration};
 
+use super::playlists::NewClip;
 use super::scope::Origin;
 use super::{App, Overlay};
 
@@ -258,6 +260,48 @@ impl App {
             }
             Err(reason) => self.view.message = Some(reason.to_owned()),
         }
+    }
+
+    /// 面板里的 `a`：从选中的跳转点到下一个跳转点（后面没有了就到文件结尾）这一段，
+    /// 接着挑加到哪个播放列表。片段名用这个跳转点的名字。下一个跳转点按整个文件算：
+    /// 正在放片段时面板只列片段以内的，加的这一段可以延伸到片段之外。
+    pub(super) fn start_adding_clip(&mut self) {
+        let Ok(index) = self.mark_target() else {
+            return;
+        };
+        let (Some(mark), Some(duration)) = (
+            self.current_marks().get(self.view.marks_selected).cloned(),
+            self.effective_duration(),
+        ) else {
+            return;
+        };
+        let path = self.catalog.tracks()[index].path.clone();
+        let end = marks::within(self.marks.store.marks(&path), duration)
+            .iter()
+            .map(|other| other.position)
+            .find(|position| *position > mark.position);
+        self.view.clip = Some(NewClip {
+            path,
+            range: Range {
+                start: mark.position,
+                end,
+            },
+            name: mark.name,
+        });
+        // 光标先落在这次运行里上一次加过的列表上。
+        if let Some(position) = self.view.clip_list.and_then(|id| {
+            self.playlists
+                .all()
+                .iter()
+                .position(|playlist| playlist.id == id)
+        }) {
+            self.view.playlist_selected = position;
+        }
+        self.view.playlist_selected = self
+            .view
+            .playlist_selected
+            .min(self.playlists.all().len().saturating_sub(1));
+        self.view.overlay = Overlay::PickPlaylist;
     }
 
     /// 面板里的 Enter：跳到选中的跳转点并关闭面板。

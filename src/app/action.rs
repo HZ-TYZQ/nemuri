@@ -10,7 +10,7 @@ use crate::marks::Role;
 use crate::media::MediaCommand;
 use crate::track::RepeatMode;
 
-use super::{App, Overlay};
+use super::{App, Bound, Overlay};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -98,6 +98,12 @@ pub enum Action {
     ClearQueue,
     /// 选中的队列条目上移（负数）或下移（正数）。
     MoveInQueue(isize),
+    /// 选中的列表条目上移（负数）或下移（正数）。
+    MoveInPlaylist(isize),
+    /// 挑选中列表条目的开头或结尾。
+    EditEntryBound(Bound),
+    /// 打开给选中列表条目改名的输入框。
+    RenameEntry,
 
     // 跳转点面板
     RemoveMark,
@@ -105,6 +111,8 @@ pub enum Action {
     RenameMark,
     /// 把选中的跳转点设为起点或终点；已经是了就取消。
     ToggleMarkRole(Role),
+    /// 从选中的跳转点到下一个跳转点这一段加进播放列表，接着挑加到哪个列表。
+    AddClip,
 }
 
 impl From<MediaCommand> for Action {
@@ -213,6 +221,10 @@ impl App {
             Action::RemoveFromQueue => self.remove_queue_selected(),
             Action::ClearQueue => self.clear_queue(),
             Action::MoveInQueue(offset) => self.move_queue_selected(offset),
+            Action::MoveInPlaylist(offset) => self.move_playlist_entry(offset),
+            Action::EditEntryBound(bound) => self.open_entry_bound(bound),
+            Action::RenameEntry => self.start_renaming_entry(),
+            Action::AddClip => self.start_adding_clip(),
             Action::AddMark => self.add_mark(),
             Action::PreviousMark => self.jump_to_previous_mark(),
             Action::NextMark => self.jump_to_next_mark(),
@@ -234,9 +246,13 @@ impl App {
         match self.view.overlay {
             Overlay::None if delta.is_negative() => self.select_previous(),
             Overlay::None => self.select_next(),
-            Overlay::Playlists => {
+            Overlay::Playlists | Overlay::PickPlaylist => {
                 self.view.playlist_selected =
                     step(self.view.playlist_selected, self.playlists.all().len());
+            }
+            Overlay::EntryBound => {
+                self.view.bound_selected =
+                    step(self.view.bound_selected, self.bound_choices().len());
             }
             Overlay::PlaylistTracks => {
                 let len = self.selected_playlist_len();
@@ -258,7 +274,10 @@ impl App {
             Overlay::Help => {
                 self.view.help_scroll = self.view.help_scroll.saturating_add_signed(delta);
             }
-            Overlay::NameInput | Overlay::DeleteConfirm | Overlay::MarkName => {}
+            Overlay::NameInput
+            | Overlay::DeleteConfirm
+            | Overlay::MarkName
+            | Overlay::EntryName => {}
         }
     }
 
@@ -268,12 +287,17 @@ impl App {
                 self.cancel_pending_selection_restore();
                 self.view.selected = row;
             }
-            Overlay::Playlists => self.view.playlist_selected = row,
+            Overlay::Playlists | Overlay::PickPlaylist => self.view.playlist_selected = row,
+            Overlay::EntryBound => self.view.bound_selected = row,
             Overlay::PlaylistTracks => self.view.playlist_track_selected = row,
             Overlay::Queue => self.view.queue_selected = row,
             Overlay::Folders => self.view.folder_selected = row,
             Overlay::Marks => self.view.marks_selected = row,
-            Overlay::Help | Overlay::NameInput | Overlay::DeleteConfirm | Overlay::MarkName => {}
+            Overlay::Help
+            | Overlay::NameInput
+            | Overlay::DeleteConfirm
+            | Overlay::MarkName
+            | Overlay::EntryName => {}
         }
     }
 
@@ -297,6 +321,9 @@ impl App {
             Overlay::NameInput => self.create_playlist(),
             Overlay::Marks => self.jump_to_selected_mark(),
             Overlay::MarkName => self.rename_selected_mark(),
+            Overlay::PickPlaylist => self.add_clip_to_selected_playlist(),
+            Overlay::EntryBound => self.set_entry_bound(),
+            Overlay::EntryName => self.rename_selected_entry(),
             Overlay::Help | Overlay::DeleteConfirm => {}
         }
     }
@@ -310,16 +337,29 @@ impl App {
             | Overlay::Queue
             | Overlay::Folders
             | Overlay::Marks => self.view.overlay = Overlay::None,
+            // 在“加到播放列表”面板里新建列表时，取消就回到那里。
+            Overlay::NameInput if self.view.clip.is_some() => {
+                self.view.overlay = Overlay::PickPlaylist;
+            }
             Overlay::PlaylistTracks | Overlay::NameInput | Overlay::DeleteConfirm => {
                 self.view.overlay = Overlay::Playlists;
             }
             Overlay::MarkName => self.view.overlay = Overlay::Marks,
+            Overlay::PickPlaylist => {
+                self.view.clip = None;
+                self.view.overlay = Overlay::Marks;
+            }
+            Overlay::EntryBound | Overlay::EntryName => {
+                self.view.overlay = Overlay::PlaylistTracks;
+            }
         }
     }
 
     fn input_char(&mut self, character: char) {
         match self.view.overlay {
-            Overlay::NameInput | Overlay::MarkName => self.view.name_input.push(character),
+            Overlay::NameInput | Overlay::MarkName | Overlay::EntryName => {
+                self.view.name_input.push(character);
+            }
             Overlay::None if self.view.search_active => {
                 let mut query = self.catalog.query().to_owned();
                 query.push(character);
@@ -331,7 +371,7 @@ impl App {
 
     fn input_backspace(&mut self) {
         match self.view.overlay {
-            Overlay::NameInput | Overlay::MarkName => {
+            Overlay::NameInput | Overlay::MarkName | Overlay::EntryName => {
                 self.view.name_input.pop();
             }
             Overlay::None if self.view.search_active => {

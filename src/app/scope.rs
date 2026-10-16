@@ -110,6 +110,18 @@ impl App {
         Some((playlist.name.as_str(), number, playlist.entries.len()))
     }
 
+    /// 列表范围的列表和当前条目，供面板标出；当前条目删掉了时条目为 None。曲库范围时为 None。
+    pub fn scope_position(&self) -> Option<(PlaylistId, Option<EntryId>)> {
+        let Scope::Playlist(scope) = &self.playback.scope else {
+            return None;
+        };
+        let entry = match scope.cursor {
+            Cursor::At(entry) => Some(entry),
+            Cursor::Before(_) => None,
+        };
+        Some((scope.playlist, entry))
+    }
+
     /// 当前范围的循环方式和随机开关：列表范围用这个列表的循环方式。
     pub fn playback_mode(&self) -> PlaybackMode {
         let repeat = match self.in_playlist().and_then(|id| self.playlists.get(id)) {

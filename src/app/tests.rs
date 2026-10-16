@@ -3441,7 +3441,7 @@ fn the_marks_panel_lists_times_names_and_the_current_section() {
     assert!(
         screen
             .iter()
-            .any(|row| row.contains("Enter跳到这里·s/S起点/终点·e改名·d删除·Esc关闭"))
+            .any(|row| row.contains("Enter跳到这里·a加入列表·s/S起点/终点·e改名·d删除·Esc关闭"))
     );
 
     press(&mut app, key(KeyCode::Char('e')));
@@ -3994,7 +3994,10 @@ fn the_marks_panel_tags_the_start_and_end_points_and_keeps_the_whole_hint() {
     press(&mut app, key(KeyCode::Char('B')));
     app.dispatch(Action::SelectRow(0));
     press(&mut app, key(KeyCode::Char('e')));
-    type_text(&mut app, "正片开始之前的一大段说明和广告，名字长到放不下");
+    type_text(
+        &mut app,
+        "正片开始之前的一大段说明和广告，名字长到这个面板加宽之后也还是放不下",
+    );
     press(&mut app, key(KeyCode::Enter));
 
     let (_, backend) = render(&app, 100, 30);
@@ -4017,7 +4020,7 @@ fn the_marks_panel_tags_the_start_and_end_points_and_keeps_the_whole_hint() {
     assert!(
         screen
             .iter()
-            .any(|row| row.contains("Enter跳到这里·s/S起点/终点·e改名·d删除·Esc关闭")),
+            .any(|row| row.contains("Enter跳到这里·a加入列表·s/S起点/终点·e改名·d删除·Esc关闭")),
         "{screen:#?}"
     );
 
@@ -4818,4 +4821,273 @@ fn a_rescan_moves_playlist_entries_to_a_renamed_file() {
     settle_search_and_selection(&mut app);
     play_from_playlist(&mut app, 0);
     assert_eq!(playing(&app), renamed);
+}
+
+/// 打开跳转点面板，给第 `row` 个跳转点改名，再关掉面板。
+fn name_mark(app: &mut App, row: usize, name: &str) {
+    press(app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(row));
+    press(app, key(KeyCode::Char('e')));
+    type_text(app, name);
+    press(app, key(KeyCode::Enter));
+    press(app, key(KeyCode::Esc));
+}
+
+/// 列表里各条的范围和名字（分钟数和秒数都按 `Duration` 比）。
+fn entries_of(app: &App, list: usize) -> Vec<(crate::playlist::Range, Option<String>)> {
+    app.playlists.all()[list]
+        .entries
+        .iter()
+        .map(|entry| (entry.range, entry.name.clone()))
+        .collect()
+}
+
+fn range(start: Duration, end: Option<Duration>) -> crate::playlist::Range {
+    crate::playlist::Range { start, end }
+}
+
+#[test]
+fn a_in_the_marks_panel_adds_the_section_to_a_chosen_playlist() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[2, 5, 8], 6 * MINUTE);
+    name_mark(&mut app, 1, "掏耳");
+    app.playlists.create("睡前").unwrap();
+    app.playlists.create("白天").unwrap();
+
+    // 从选中的跳转点到下一个跳转点，名字用跳转点的名字；选好列表就回到跳转点面板。
+    press(&mut app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(1));
+    press(&mut app, key(KeyCode::Char('a')));
+    assert_eq!(app.view.overlay, Overlay::PickPlaylist);
+    app.dispatch(Action::SelectRow(1));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已加进“睡前”：掏耳（3:00）")
+    );
+    assert_eq!(
+        entries_of(&app, 1),
+        [(range(5 * MINUTE, Some(8 * MINUTE)), Some("掏耳".to_owned()))]
+    );
+
+    // 最后一个跳转点到文件结尾；光标先落在上次加过的列表上。
+    app.dispatch(Action::SelectRow(2));
+    press(&mut app, key(KeyCode::Char('a')));
+    assert_eq!(app.view.playlist_selected, 1);
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已加进“睡前”：12:00 的片段")
+    );
+    assert_eq!(entries_of(&app, 1)[1], (range(8 * MINUTE, None), None));
+
+    // Esc 不加，回到跳转点面板。
+    press(&mut app, key(KeyCode::Char('a')));
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(entries_of(&app, 1).len(), 2);
+
+    // 在这里新建一个列表，直接加进去；新建时按 Esc 回到选列表。
+    app.dispatch(Action::SelectRow(0));
+    press(&mut app, key(KeyCode::Char('a')));
+    press(&mut app, key(KeyCode::Char('c')));
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.view.overlay, Overlay::PickPlaylist);
+    press(&mut app, key(KeyCode::Char('c')));
+    type_text(&mut app, "午睡");
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已加进“午睡”：3:00 的片段")
+    );
+    let saved = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
+    let names: Vec<&str> = saved.all().iter().map(|list| list.name.as_str()).collect();
+    assert_eq!(names, ["午睡", "白天", "睡前"]);
+    assert_eq!(
+        saved.all()[0].entries[0].range,
+        range(2 * MINUTE, Some(5 * MINUTE))
+    );
+}
+
+#[test]
+fn a_clip_added_while_playing_a_clip_may_reach_past_its_end() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[5, 8, 12], MINUTE);
+    add_clips(&mut app, &[(0, 5, Some(10), None)]);
+    play_from_playlist(&mut app, 0);
+
+    // 面板只列片段里的 5:00 和 8:00；8:00 之后的下一个跳转点在片段之外。
+    press(&mut app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(1));
+    press(&mut app, key(KeyCode::Char('a')));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(
+        entries_of(&app, 0)[1],
+        (range(8 * MINUTE, Some(12 * MINUTE)), None)
+    );
+    // 加到正在播放的列表里，当前条目不变。
+    assert_eq!(scope(&app), in_list(Some(1), 2));
+}
+
+#[test]
+fn the_entries_panel_moves_renames_and_picks_the_bounds_of_an_entry() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[2, 5, 8], MINUTE);
+    name_mark(&mut app, 1, "掏耳");
+    add_clips(&mut app, &[(0, 0, None, None), (2, 0, None, None)]);
+    press(&mut app, key(KeyCode::Char('P')));
+    press(&mut app, key(KeyCode::Enter));
+
+    // J / K 移动，选择跟着走。
+    press(&mut app, key(KeyCode::Char('J')));
+    assert_eq!(app.view.playlist_track_selected, 1);
+    assert_eq!(
+        app.playlists.all()[0].entries[1].path,
+        app.catalog.tracks()[0].path
+    );
+    press(&mut app, key(KeyCode::Char('J')));
+    assert_eq!(app.view.playlist_track_selected, 1);
+    press(&mut app, key(KeyCode::Char('K')));
+    assert_eq!(app.view.playlist_track_selected, 0);
+    assert_eq!(
+        app.playlists.all()[0].entries[0].path,
+        app.catalog.tracks()[0].path
+    );
+
+    // 改名，留空清除。
+    press(&mut app, key(KeyCode::Char('e')));
+    type_text(&mut app, "全集");
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.overlay, Overlay::PlaylistTracks);
+    assert_eq!(entries_of(&app, 0)[0].1.as_deref(), Some("全集"));
+    press(&mut app, key(KeyCode::Char('e')));
+    press(&mut app, key(KeyCode::Backspace));
+    press(&mut app, key(KeyCode::Backspace));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(entries_of(&app, 0)[0].1, None);
+
+    // 开头从文件开头和跳转点里挑，光标落在现在的开头上。
+    press(&mut app, key(KeyCode::Char('s')));
+    assert_eq!(app.view.overlay, Overlay::EntryBound);
+    let starts: Vec<Option<Duration>> = app
+        .bound_choices()
+        .iter()
+        .map(|choice| choice.position)
+        .collect();
+    assert_eq!(
+        starts,
+        [
+            Some(Duration::ZERO),
+            Some(2 * MINUTE),
+            Some(5 * MINUTE),
+            Some(8 * MINUTE)
+        ]
+    );
+    assert_eq!(app.view.bound_selected, 0);
+    app.dispatch(Action::SelectRow(2));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.overlay, Overlay::PlaylistTracks);
+    assert_eq!(app.view.message.as_deref(), Some("开头改为 5:00 掏耳"));
+
+    // 结尾是开头之后的跳转点和文件结尾。
+    press(&mut app, key(KeyCode::Char('S')));
+    let ends: Vec<Option<Duration>> = app
+        .bound_choices()
+        .iter()
+        .map(|choice| choice.position)
+        .collect();
+    assert_eq!(ends, [Some(8 * MINUTE), None]);
+    assert_eq!(app.view.bound_selected, 1);
+    press(&mut app, key(KeyCode::Char('k')));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.message.as_deref(), Some("结尾改为 8:00"));
+    assert_eq!(
+        entries_of(&app, 0)[0].0,
+        range(5 * MINUTE, Some(8 * MINUTE))
+    );
+
+    // 开头只能挑结尾之前的；Esc 不改。
+    press(&mut app, key(KeyCode::Char('s')));
+    assert_eq!(app.bound_choices().len(), 3);
+    assert_eq!(app.view.bound_selected, 2);
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.view.overlay, Overlay::PlaylistTracks);
+    let saved = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
+    assert_eq!(
+        saved.all()[0].entries[0].range,
+        range(5 * MINUTE, Some(8 * MINUTE))
+    );
+
+    // 短曲目没有跳转点，只能整首。
+    app.dispatch(Action::SelectRow(1));
+    press(&mut app, key(KeyCode::Char('S')));
+    assert_eq!(app.view.overlay, Overlay::PlaylistTracks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("这首没有跳转点，只能整首播放")
+    );
+}
+
+#[test]
+fn moving_entries_of_the_playing_playlist_keeps_the_current_entry() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 3);
+    play_from_playlist(&mut app, 1);
+
+    press(&mut app, key(KeyCode::Char('P')));
+    press(&mut app, key(KeyCode::Enter));
+    app.dispatch(Action::SelectRow(1));
+    press(&mut app, key(KeyCode::Char('K')));
+    press(&mut app, key(KeyCode::Esc));
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(scope(&app), in_list(Some(1), 3));
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[0]);
+}
+
+#[test]
+fn the_playlist_panels_show_counts_modes_ranges_and_the_playing_entry() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    recordings_fixture(&mut app, &music);
+    add_clips(
+        &mut app,
+        &[(0, 5, Some(15), Some("掏耳")), (2, 0, None, None)],
+    );
+    let _ = app
+        .playlists
+        .add_entry(
+            0,
+            &track(music.join("gone.wav")),
+            crate::playlist::Range::WHOLE,
+            None,
+        )
+        .unwrap();
+    play_from_playlist(&mut app, 0);
+
+    press(&mut app, key(KeyCode::Char('P')));
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    assert!(screen.contains("▸●睡前3条·顺序"), "{screen}");
+
+    press(&mut app, key(KeyCode::Enter));
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    for expected in [
+        "睡前·3条·顺序",
+        "▸●1.rec1·掏耳5:00–15:00",
+        "2.song1:40",
+        "⚠3.gone.wav不在曲库中",
+        "Enter从此处播放·J/K移动·s/S开头/结尾·e改名·d移除·Esc返回",
+    ] {
+        assert!(screen.contains(expected), "缺少“{expected}”：\n{screen}");
+    }
+
+    press(&mut app, key(KeyCode::Char('S')));
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    // 这首没有跳转点：只提示，不打开选择面板。
+    assert!(screen.contains("这首没有跳转点"), "{screen}");
 }

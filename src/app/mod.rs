@@ -38,6 +38,7 @@ pub use action::Action;
 pub use catalog::Catalog;
 use marks::Marks;
 use playback::Skip;
+pub use playlists::{Bound, BoundChoice, NewClip};
 use progress::Progress;
 use sleep::SleepTimer;
 pub use state::{Playback, ViewState};
@@ -57,6 +58,12 @@ pub enum Overlay {
     Marks,
     /// 给面板里选中的跳转点改名。
     MarkName,
+    /// 把跳转点面板里选中的一段加到哪个播放列表。
+    PickPlaylist,
+    /// 给列表条目挑开头或结尾。
+    EntryBound,
+    /// 给列表条目改名。
+    EntryName,
 }
 
 /// 曲库变动前记下的曲目，变动后按路径找回它们的新下标。

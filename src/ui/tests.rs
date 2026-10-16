@@ -12,14 +12,14 @@ use crate::track::Track;
 
 use super::ListView;
 use super::keymap::{
-    self, DELETE_CONFIRM, FOLDERS, HELP, Key, LIBRARY, MARK_NAME, MARKS, NAME_INPUT,
-    PLAYLIST_TRACKS, PLAYLISTS, QUEUE, SEARCH,
+    self, DELETE_CONFIRM, ENTRY_BOUND, ENTRY_NAME, FOLDERS, HELP, Key, LIBRARY, MARK_NAME, MARKS,
+    NAME_INPUT, PICK_PLAYLIST, PLAYLIST_TRACKS, PLAYLISTS, QUEUE, SEARCH,
 };
 use super::library::{
     INACTIVE_ICON, LIST_ICON_WIDTH, PAUSE_ACTION_ICON, PLAY_ACTION_ICON, ProgressCell, RowText,
     STOPPED_ICON, duration_column_width, playback_action_indicator, track_row_text,
 };
-use super::overlays::resolve_queue_rows;
+use super::overlays::resolve_rows;
 use super::text::{
     ascii_progress_bar, fmt_duration, mark_ticks, now_playing_text, truncate_display,
 };
@@ -378,10 +378,10 @@ fn queue_rows_resolve_duplicates_and_report_paths_missing_from_the_library() {
     let queue = VecDeque::from(vec![present.clone(), absent, present]);
 
     assert_eq!(
-        resolve_queue_rows(&tracks, &queue),
+        resolve_rows(&tracks, queue.iter().map(PathBuf::as_path)),
         vec![Some(1), None, Some(1)]
     );
-    assert!(resolve_queue_rows(&tracks, &VecDeque::new()).is_empty());
+    assert!(resolve_rows(&tracks, std::iter::empty()).is_empty());
 }
 
 fn queue_test_track(path: PathBuf) -> Track {
@@ -415,6 +415,9 @@ fn every_binding_is_reachable_in_its_table() {
         ("delete confirm", DELETE_CONFIRM, false),
         ("marks", MARKS, false),
         ("mark name", MARK_NAME, true),
+        ("pick playlist", PICK_PLAYLIST, false),
+        ("entry bound", ENTRY_BOUND, false),
+        ("entry name", ENTRY_NAME, true),
     ];
     for (name, table, text_input) in tables {
         for binding in table {
@@ -441,8 +444,14 @@ fn generated_hints_keep_the_overlay_wording() {
     );
     assert_eq!(
         keymap::hints(PLAYLIST_TRACKS),
-        "Enter 从此处播放 · d 从列表移除 · Esc 返回"
+        "Enter 从此处播放 · J/K 移动 · s/S 开头/结尾 · e 改名 · d 移除 · Esc 返回"
     );
+    assert_eq!(
+        keymap::hints(PICK_PLAYLIST),
+        "Enter 加入 · c 新建 · Esc 返回"
+    );
+    assert_eq!(keymap::hints(ENTRY_BOUND), "Enter 选定 · Esc 取消");
+    assert_eq!(keymap::hints(ENTRY_NAME), "Enter 确定 · Esc 取消");
     assert_eq!(
         keymap::hints(QUEUE),
         "Enter 跳到此处播放 · d 移除 · J/K 上下移动 · c 清空 · Esc 关闭"
@@ -451,7 +460,7 @@ fn generated_hints_keep_the_overlay_wording() {
     assert_eq!(keymap::hints(NAME_INPUT), "Enter 创建 · Esc 取消");
     assert_eq!(
         keymap::hints(MARKS),
-        "Enter 跳到这里 · s/S 起点/终点 · e 改名 · d 删除 · Esc 关闭"
+        "Enter 跳到这里 · a 加入列表 · s/S 起点/终点 · e 改名 · d 删除 · Esc 关闭"
     );
     assert_eq!(keymap::hints(MARK_NAME), "Enter 确定 · Esc 取消");
     assert_eq!(keymap::hints(DELETE_CONFIRM), "y 确认 · n/Esc 取消");

@@ -9,10 +9,12 @@ use std::path::PathBuf;
 use crate::lyrics::Lyrics;
 use crate::media::MediaEvent;
 use crate::player::PlaybackBackend;
+use crate::playlist::PlaylistId;
 use crate::spectrum::SpectrumProcessor;
 
 use super::Overlay;
 use super::order::PlaybackOrder;
+use super::playlists::{Bound, NewClip};
 use super::scope::{Origin, Played, Scope};
 use super::sleep::SleepTimer;
 
@@ -83,8 +85,15 @@ pub struct ViewState {
     pub(crate) marks_for: Option<(PathBuf, Origin)>,
     /// 帮助弹层往下滚了几行。终端够高时界面不使用它。
     pub(crate) help_scroll: usize,
-    /// 新建播放列表或给跳转点改名时输入的名称。
+    /// 新建播放列表、给跳转点或列表条目改名时输入的名称。
     pub(crate) name_input: String,
+    /// 正要加进播放列表的片段：“加到播放列表”面板和在那里新建列表时用。
+    pub(crate) clip: Option<NewClip>,
+    /// 这次运行里上一次把片段加进了哪个列表，下次光标先落在它上面。
+    pub(crate) clip_list: Option<PlaylistId>,
+    /// 条目的开头和结尾选择面板改的是哪一个，光标在第几行。
+    pub(crate) bound: Bound,
+    pub(crate) bound_selected: usize,
     /// 底栏显示的一行提示。
     pub(crate) message: Option<String>,
     /// 重扫或重排后要重新选中的曲目；等搜索结果就绪再落到光标上。

@@ -6,7 +6,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{Action, App, Overlay};
+use crate::app::{Action, App, Bound, Overlay};
 use crate::marks::Role;
 
 use super::ViewLayout;
@@ -253,7 +253,7 @@ pub(super) const LIBRARY: &[Binding] = &[
     ),
     hinted(
         "P",
-        "播放列表",
+        "播放列表（每个列表各记循环方式，z 切换）",
         "P 列表",
         &[(ch('P'), Action::OpenOverlay(Overlay::Playlists))],
     ),
@@ -308,8 +308,46 @@ pub(super) const PLAYLIST_TRACKS: &[Binding] = &[
         "从此处播放",
         &[(code(KeyCode::Enter), Action::Activate)],
     ),
-    listed("d", "从列表移除", &[(ch('d'), Action::RemoveFromPlaylist)]),
+    listed(
+        "J/K",
+        "移动",
+        &[
+            (ch('J'), Action::MoveInPlaylist(1)),
+            (ch('K'), Action::MoveInPlaylist(-1)),
+        ],
+    ),
+    listed(
+        "s/S",
+        "开头/结尾",
+        &[
+            (ch('s'), Action::EditEntryBound(Bound::Start)),
+            (ch('S'), Action::EditEntryBound(Bound::End)),
+        ],
+    ),
+    listed("e", "改名", &[(ch('e'), Action::RenameEntry)]),
+    listed("d", "移除", &[(ch('d'), Action::RemoveFromPlaylist)]),
     listed("Esc", "返回", &[(code(KeyCode::Esc), Action::Back)]),
+];
+
+/// 把跳转点面板里选中的一段加到哪个列表。
+pub(super) const PICK_PLAYLIST: &[Binding] = &[
+    hidden(CURSOR),
+    listed("Enter", "加入", &[(code(KeyCode::Enter), Action::Activate)]),
+    listed("c", "新建", &[(ch('c'), Action::NewPlaylist)]),
+    listed("Esc", "返回", &[(code(KeyCode::Esc), Action::Back)]),
+];
+
+pub(super) const ENTRY_BOUND: &[Binding] = &[
+    hidden(CURSOR),
+    listed("Enter", "选定", &[(code(KeyCode::Enter), Action::Activate)]),
+    listed("Esc", "取消", &[(code(KeyCode::Esc), Action::Back)]),
+];
+
+/// 输入框里没有绑定的字符都当作输入。
+pub(super) const ENTRY_NAME: &[Binding] = &[
+    listed("Enter", "确定", &[(code(KeyCode::Enter), Action::Activate)]),
+    listed("Esc", "取消", &[(code(KeyCode::Esc), Action::Back)]),
+    hidden(&[(code(KeyCode::Backspace), Action::InputBackspace)]),
 ];
 
 pub(super) const QUEUE: &[Binding] = &[
@@ -357,6 +395,7 @@ pub(super) const MARKS: &[Binding] = &[
         "跳到这里",
         &[(code(KeyCode::Enter), Action::Activate)],
     ),
+    listed("a", "加入列表", &[(ch('a'), Action::AddClip)]),
     listed(
         "s/S",
         "起点/终点",
@@ -423,6 +462,9 @@ fn bindings_for(app: &App) -> (&'static [Binding], bool) {
         Overlay::DeleteConfirm => (DELETE_CONFIRM, false),
         Overlay::Marks => (MARKS, false),
         Overlay::MarkName => (MARK_NAME, true),
+        Overlay::PickPlaylist => (PICK_PLAYLIST, false),
+        Overlay::EntryBound => (ENTRY_BOUND, false),
+        Overlay::EntryName => (ENTRY_NAME, true),
     }
 }
 

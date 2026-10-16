@@ -1,20 +1,20 @@
 //! 帮助、播放列表、播放队列、文件夹、跳转点和确认弹层。
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::{App, Overlay};
+use crate::app::{App, Bound, BoundChoice, Overlay};
 use crate::marks::Role;
 use crate::theme::Theme;
 use crate::track::Track;
 
 use super::keymap::{
-    self, DELETE_CONFIRM, FOLDERS, HELP, MARK_NAME, MARKS, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS,
-    QUEUE,
+    self, DELETE_CONFIRM, ENTRY_BOUND, ENTRY_NAME, FOLDERS, HELP, MARK_NAME, MARKS, NAME_INPUT,
+    PICK_PLAYLIST, PLAYLIST_TRACKS, PLAYLISTS, QUEUE,
 };
 use super::text::{fmt_duration, now_playing_text, truncate_display};
 use super::{ListView, ViewLayout};
@@ -29,6 +29,8 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: 
             | Overlay::Queue
             | Overlay::Folders
             | Overlay::Marks
+            | Overlay::PickPlaylist
+            | Overlay::EntryBound
     ) {
         view.clear();
     }
@@ -40,6 +42,23 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: 
         Overlay::PlaylistTracks => draw_playlist_tracks(frame, app, theme, view),
         Overlay::Folders => draw_folders(frame, app, theme, view),
         Overlay::Marks => draw_marks(frame, app, theme, view),
+        Overlay::PickPlaylist => {
+            draw_playlist_list(frame, app, theme, view, " 加到播放列表 ", PICK_PLAYLIST);
+        }
+        Overlay::EntryBound => draw_entry_bound(frame, app, theme, view),
+        Overlay::EntryName => draw_text_popup(
+            frame,
+            " 条目改名 ",
+            vec![
+                "名字（留空清除）：",
+                &format!("> {}█", app.view().name_input),
+                "",
+                &keymap::hints(ENTRY_NAME),
+            ],
+            58,
+            8,
+            theme,
+        ),
         Overlay::MarkName => {
             let at = app
                 .current_marks()
@@ -98,15 +117,26 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: 
 }
 
 fn draw_playlists(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
+    draw_playlist_list(frame, app, theme, view, " 播放列表 ", PLAYLISTS);
+}
+
+/// 播放列表面板和“加到播放列表”面板共用的列表：每行写名字、条目数和循环方式，
+/// 正在播放的列表用 ● 标出。
+fn draw_playlist_list(
+    frame: &mut Frame,
+    app: &App,
+    theme: &Theme,
+    view: &mut ListView,
+    title: &str,
+    bindings: &[keymap::Binding],
+) {
     let area = centered(frame.area(), 70, 70);
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .title(Span::styled(
-            " 播放列表 ",
-            Style::new().fg(theme.primary).bold(),
-        ))
+        .title(Span::styled(title, Style::new().fg(theme.primary).bold()))
         .border_style(Style::new().fg(theme.border));
+    let playing = app.scope_position().map(|(playlist, _)| playlist);
     let items = if app.playlists().all().is_empty() {
         vec![ListItem::new(Span::styled(
             "暂无播放列表，按 c 创建",
@@ -117,11 +147,23 @@ fn draw_playlists(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListVi
             .all()
             .iter()
             .map(|playlist| {
-                ListItem::new(format!(
-                    "{}  ({} 首)",
-                    playlist.name,
-                    playlist.entries.len()
-                ))
+                let marker = if playing == Some(playlist.id) {
+                    "● "
+                } else {
+                    "  "
+                };
+                ListItem::new(Line::from(vec![
+                    Span::styled(marker, Style::new().fg(theme.primary)),
+                    Span::styled(playlist.name.as_str(), Style::new().fg(theme.primary)),
+                    Span::styled(
+                        format!(
+                            "  {} 条 · {}",
+                            playlist.entries.len(),
+                            playlist.repeat.label()
+                        ),
+                        Style::new().fg(theme.muted),
+                    ),
+                ]))
             })
             .collect()
     };
@@ -136,11 +178,13 @@ fn draw_playlists(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListVi
     view.record(viewport, app.playlists().all().len());
     let help = help_row(inner);
     frame.render_widget(
-        Paragraph::new(keymap::hints(PLAYLISTS)).style(Style::new().fg(theme.muted)),
+        Paragraph::new(keymap::hints(bindings)).style(Style::new().fg(theme.muted)),
         help,
     );
 }
 
+/// 一个列表的条目：序号、文件名和条目名，右边是片段在文件里的起止，整首是时长。
+/// 这个列表正在播放时，当前条目用 ● 标出；文件不在曲库中的标出来，播放时会跳过。
 fn draw_playlist_tracks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
     let area = centered(frame.area(), 78, 76);
     frame.render_widget(Clear, area);
@@ -151,27 +195,97 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled(
-            format!(" {} ", playlist.name),
+            format!(
+                " {} · {} 条 · {} ",
+                playlist.name,
+                playlist.entries.len(),
+                playlist.repeat.label()
+            ),
             Style::new().fg(theme.primary).bold(),
         ))
         .border_style(Style::new().fg(theme.border));
-    let items = playlist.entries.iter().map(|entry| {
-        let path = &entry.path;
-        let missing = !path.is_file();
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("?");
-        if missing {
+    let current = app
+        .scope_position()
+        .filter(|(id, _)| *id == playlist.id)
+        .and_then(|(_, entry)| entry);
+    let tracks = app.catalog().tracks();
+    let rows = resolve_rows(
+        tracks,
+        playlist.entries.iter().map(|entry| entry.path.as_path()),
+    );
+    let right: Vec<String> = playlist
+        .entries
+        .iter()
+        .zip(&rows)
+        .map(|(entry, row)| match entry.range.end {
+            _ if entry.range.is_whole() => row
+                .and_then(|index| tracks.get(index)?.duration)
+                .map(fmt_duration)
+                .unwrap_or_else(|| "--:--".to_owned()),
+            Some(end) => format!("{}–{}", fmt_duration(entry.range.start), fmt_duration(end)),
+            None => format!("{}–结尾", fmt_duration(entry.range.start)),
+        })
+        .collect();
+    let order_width = format!("{}. ", playlist.entries.len()).len();
+    let right_width = right
+        .iter()
+        .map(|text| UnicodeWidthStr::width(text.as_str()))
+        .max()
+        .unwrap_or_default();
+    // 去掉左右边框、highlight_symbol、标记和序号，右边一列前留一列间隔。
+    let text_width = usize::from(area.width)
+        .saturating_sub(2 + 2 + 2 + order_width + right_width + 1)
+        .max(1);
+    let items = playlist
+        .entries
+        .iter()
+        .zip(&rows)
+        .zip(&right)
+        .enumerate()
+        .map(|(position, ((entry, row), right))| {
+            let order = format!("{:>width$}. ", position + 1, width = order_width - 2);
+            let Some(track) = row.and_then(|index| tracks.get(index)) else {
+                let name = entry
+                    .path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("?");
+                let name_width = text_width
+                    .saturating_sub(UnicodeWidthStr::width(MISSING_LABEL))
+                    .max(1);
+                return ListItem::new(Line::from(vec![
+                    Span::styled("⚠ ", Style::new().fg(theme.danger)),
+                    Span::styled(order, Style::new().fg(theme.muted)),
+                    Span::styled(
+                        truncate_display(name, name_width),
+                        Style::new().fg(theme.danger),
+                    ),
+                    Span::styled(MISSING_LABEL, Style::new().fg(theme.muted)),
+                ]));
+            };
+            let marker = if current == Some(entry.id) {
+                "● "
+            } else {
+                "  "
+            };
+            let title = match &entry.name {
+                Some(name) => format!("{} · {name}", track.display_title()),
+                None => track.display_title().to_owned(),
+            };
+            let title = truncate_display(&title, text_width);
+            let padding = " ".repeat(
+                text_width.saturating_sub(UnicodeWidthStr::width(title.as_str()))
+                    + right_width.saturating_sub(UnicodeWidthStr::width(right.as_str()))
+                    + 1,
+            );
             ListItem::new(Line::from(vec![
-                Span::styled("⚠ ", Style::new().fg(theme.danger)),
-                Span::styled(name, Style::new().fg(theme.danger)),
-                Span::styled("  文件不可用", Style::new().fg(theme.muted)),
+                Span::styled(marker, Style::new().fg(theme.primary)),
+                Span::styled(order, Style::new().fg(theme.muted)),
+                Span::styled(title, Style::new().fg(theme.primary)),
+                Span::raw(padding),
+                Span::styled(right.as_str(), Style::new().fg(theme.muted)),
             ]))
-        } else {
-            ListItem::new(name)
-        }
-    });
+        });
     let (inner, viewport) = list_viewport(area, &block);
     frame.render_widget(block, area);
     let list = List::new(items)
@@ -187,25 +301,144 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut 
     );
 }
 
+/// 给条目挑开头或结尾：这个文件的跳转点（文件时间，带名字和起点、终点标签），
+/// 加上文件开头或文件结尾。现在的开头或结尾用 ● 标出。
+fn draw_entry_bound(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
+    let choices = app.bound_choices();
+    let entry = app
+        .playlists()
+        .all()
+        .get(app.view().playlist_selected)
+        .and_then(|playlist| playlist.entries.get(app.view().playlist_track_selected));
+    let (Some(entry), false) = (entry, choices.is_empty()) else {
+        view.clear();
+        return;
+    };
+    let track = app
+        .catalog()
+        .index_of(&entry.path)
+        .and_then(|index| app.catalog().get(index));
+    // 列表行、上下边框和提示行。
+    let area = centered(frame.area(), 64, (choices.len() as u16).saturating_add(3));
+    frame.render_widget(Clear, area);
+    let (what, current) = match app.view().bound {
+        Bound::Start => ("开头", Some(entry.range.start)),
+        Bound::End => ("结尾", entry.range.end),
+    };
+    let prefix = format!(" {what} · ");
+    let title_width = usize::from(area.width)
+        .saturating_sub(2 + 2 + UnicodeWidthStr::width(prefix.as_str()) + 1)
+        .max(1);
+    let title = track
+        .map(|track| truncate_display(track.display_title(), title_width))
+        .unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(Span::styled(
+            format!("{prefix}{title} "),
+            Style::new().fg(theme.primary).bold(),
+        ))
+        .border_style(Style::new().fg(theme.border));
+
+    let time = |choice: &BoundChoice| match choice.position {
+        Some(position) => fmt_duration(position),
+        None => track
+            .and_then(|track| track.duration)
+            .map(fmt_duration)
+            .unwrap_or_else(|| "--:--".to_owned()),
+    };
+    let time_width = choices
+        .iter()
+        .map(|choice| time(choice).len())
+        .max()
+        .unwrap_or_default();
+    // 去掉左右边框、highlight_symbol、标记、时间和时间后的两列间隔。
+    let name_width = usize::from(area.width)
+        .saturating_sub(2 + 2 + 2 + time_width + 2)
+        .max(1);
+    let items = choices.iter().map(|choice| {
+        let marker = if choice.position == current {
+            "● "
+        } else {
+            "  "
+        };
+        let mut spans = vec![
+            Span::styled(marker, Style::new().fg(theme.primary)),
+            Span::styled(
+                format!("{:>time_width$}  ", time(choice)),
+                Style::new().fg(theme.muted),
+            ),
+        ];
+        match &choice.mark {
+            Some(mark) => {
+                let tag = match mark.role {
+                    Role::Plain => None,
+                    Role::Start => Some("起点"),
+                    Role::End => Some("终点"),
+                };
+                let width = name_width
+                    .saturating_sub(tag.map_or(0, |tag| 2 + UnicodeWidthStr::width(tag)))
+                    .max(1);
+                if let Some(name) = &mark.name {
+                    spans.push(Span::styled(
+                        truncate_display(name, width),
+                        Style::new().fg(theme.primary),
+                    ));
+                }
+                if let Some(tag) = tag {
+                    spans.extend([
+                        Span::raw("  "),
+                        Span::styled(tag, Style::new().fg(theme.muted)),
+                    ]);
+                }
+            }
+            None => spans.push(Span::styled(
+                if choice.position.is_some() {
+                    "文件开头"
+                } else {
+                    "文件结尾"
+                },
+                Style::new().fg(theme.muted),
+            )),
+        }
+        ListItem::new(Line::from(spans))
+    });
+
+    let (inner, viewport) = list_viewport(area, &block);
+    frame.render_widget(block, area);
+    let list = List::new(items)
+        .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
+        .highlight_style(Style::new().bg(theme.selection_bg).bold());
+    frame.render_stateful_widget(
+        list,
+        viewport,
+        view.state_for(Some(app.view().bound_selected)),
+    );
+    view.record(viewport, choices.len());
+    let help = help_row(inner);
+    frame.render_widget(
+        Paragraph::new(keymap::hints(ENTRY_BOUND)).style(Style::new().fg(theme.muted)),
+        help,
+    );
+}
+
 const MISSING_LABEL: &str = " 不在曲库中";
 
-/// 把队列路径一次性解析成曲库下标。整体是 O(曲库 + 队列)，
-/// 避免逐条线性查找在大曲库加长队列时退化成平方级扫描。
-pub(super) fn resolve_queue_rows(
+/// 把队列或播放列表里的路径一次性解析成曲库下标。整体是 O(曲库 + 路径数)，
+/// 避免逐条线性查找在大曲库加长列表时退化成平方级扫描。
+pub(super) fn resolve_rows<'a>(
     tracks: &[Track],
-    queue: &VecDeque<PathBuf>,
+    paths: impl IntoIterator<Item = &'a Path>,
 ) -> Vec<Option<usize>> {
-    let wanted: HashSet<&Path> = queue.iter().map(PathBuf::as_path).collect();
+    let paths: Vec<&Path> = paths.into_iter().collect();
+    let wanted: HashSet<&Path> = paths.iter().copied().collect();
     let mut found: HashMap<&Path, usize> = HashMap::with_capacity(wanted.len());
     for (index, track) in tracks.iter().enumerate() {
         if wanted.contains(track.path.as_path()) {
             found.entry(track.path.as_path()).or_insert(index);
         }
     }
-    queue
-        .iter()
-        .map(|path| found.get(path.as_path()).copied())
-        .collect()
+    paths.iter().map(|path| found.get(path).copied()).collect()
 }
 
 fn draw_queue(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
@@ -230,7 +463,10 @@ fn draw_queue(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         return;
     }
 
-    let rows = resolve_queue_rows(app.catalog().tracks(), &app.playback().queue);
+    let rows = resolve_rows(
+        app.catalog().tracks(),
+        app.playback().queue.iter().map(PathBuf::as_path),
+    );
     let order_width = format!("{}. ", app.playback().queue.len()).len();
     let duration_width = rows
         .iter()
@@ -382,8 +618,8 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         view.clear();
         return;
     }
-    // 列表行、上下边框和提示行；64 列放得下整行提示。
-    let area = centered(frame.area(), 64, (marks.len() as u16).saturating_add(3));
+    // 列表行、上下边框和提示行；76 列放得下整行提示。
+    let area = centered(frame.area(), 76, (marks.len() as u16).saturating_add(3));
     frame.render_widget(Clear, area);
     let prefix = " 跳转点 · ";
     let title_width = usize::from(area.width)

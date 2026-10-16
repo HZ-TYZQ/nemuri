@@ -343,6 +343,68 @@ impl PlaylistStore {
         Ok(self.changed(changed))
     }
 
+    /// 把第 `position` 条和相邻的一条对调：`offset` 为 -1 上移、1 下移。两端都要在列表里。
+    pub fn move_entry(
+        &mut self,
+        index: usize,
+        position: usize,
+        offset: isize,
+    ) -> Result<Saved, String> {
+        let playlist = self
+            .playlists
+            .get_mut(index)
+            .ok_or_else(|| "播放列表不存在".to_owned())?;
+        let target = position
+            .checked_add_signed(offset)
+            .filter(|target| *target < playlist.entries.len() && position < playlist.entries.len())
+            .ok_or_else(|| "已经到头了".to_owned())?;
+        playlist.entries.swap(position, target);
+        let changed = playlist.id;
+        Ok(self.changed(changed))
+    }
+
+    /// 给第 `position` 条改名；去掉首尾空白后为空就清除名字。
+    pub fn rename_entry(
+        &mut self,
+        index: usize,
+        position: usize,
+        name: &str,
+    ) -> Result<Saved, String> {
+        let entry = self.entry_mut(index, position)?;
+        let name = Some(name.trim().to_owned()).filter(|name| !name.is_empty());
+        if entry.name == name {
+            return Ok(Saved::Yes);
+        }
+        entry.name = name;
+        let changed = self.playlists[index].id;
+        Ok(self.changed(changed))
+    }
+
+    /// 改第 `position` 条的范围。
+    pub fn set_range(
+        &mut self,
+        index: usize,
+        position: usize,
+        range: Range,
+    ) -> Result<Saved, String> {
+        let entry = self.entry_mut(index, position)?;
+        if entry.range == range {
+            return Ok(Saved::Yes);
+        }
+        entry.range = range;
+        let changed = self.playlists[index].id;
+        Ok(self.changed(changed))
+    }
+
+    fn entry_mut(&mut self, index: usize, position: usize) -> Result<&mut Entry, String> {
+        self.playlists
+            .get_mut(index)
+            .ok_or_else(|| "播放列表不存在".to_owned())?
+            .entries
+            .get_mut(position)
+            .ok_or_else(|| "播放列表项目不存在".to_owned())
+    }
+
     /// 改这个列表的循环方式。
     pub fn set_repeat(&mut self, id: PlaylistId, repeat: RepeatMode) -> Result<Saved, String> {
         let playlist = self
