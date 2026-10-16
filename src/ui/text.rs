@@ -20,6 +20,23 @@ pub(super) fn ascii_progress_bar(ratio: f64, width: usize) -> String {
     bar
 }
 
+/// 在 [`ascii_progress_bar`] 画好的进度条上用 '|' 标出跳转点，`ratios` 是它们各自占总时长的比例。
+/// 和播放头 '>' 落在同一格时显示播放头。
+pub(super) fn mark_ticks(bar: &str, ratios: impl IntoIterator<Item = f64>) -> String {
+    let mut cells: Vec<char> = bar.chars().collect();
+    let Some(last) = cells.len().checked_sub(1) else {
+        return String::new();
+    };
+    let width = cells.len() as f64;
+    for ratio in ratios {
+        let cell = ((ratio.clamp(0.0, 1.0) * width).floor() as usize).min(last);
+        if cells[cell] != '>' {
+            cells[cell] = '|';
+        }
+    }
+    cells.into_iter().collect()
+}
+
 /// 按终端显示宽度截断：超出时保留 max_width-1 列内容后接省略号。
 pub(super) fn truncate_display(text: &str, max_width: usize) -> String {
     if UnicodeWidthStr::width(text) <= max_width {

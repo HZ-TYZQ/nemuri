@@ -3512,3 +3512,57 @@ fn a_failed_save_is_reported_and_retried_on_exit() {
     app.save_marks().unwrap();
     assert!(std::fs::read_to_string(&file).unwrap().contains("300000"));
 }
+
+#[test]
+fn the_now_playing_bar_shows_marks_and_the_named_section() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[5, 10], 11 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    press(&mut app, key(KeyCode::Char('e')));
+    type_text(&mut app, "耳语");
+    press(&mut app, key(KeyCode::Enter));
+    press(&mut app, key(KeyCode::Esc));
+
+    let (_, backend) = render(&app, 100, 24);
+    let rows = screen_rows(&backend);
+    assert!(
+        rows.iter().any(|row| row.contains("♫正在播放·耳语")),
+        "{rows:#?}"
+    );
+    // 跳转点在总时长的 25% 和 50% 处，播放头在 55%。
+    let row = rows
+        .iter()
+        .find(|row| row.contains("11:00") && row.contains("20:00"))
+        .unwrap();
+    let start = row.find("11:00").unwrap() + "11:00".len();
+    let end = row.rfind("20:00").unwrap();
+    let bar: Vec<char> = row[start..end].chars().collect();
+    let cell = |ratio: f64| (ratio * bar.len() as f64).floor() as usize;
+    let ticks: Vec<usize> = (0..bar.len()).filter(|&at| bar[at] == '|').collect();
+    assert_eq!(ticks, [cell(0.25), cell(0.5)], "{row}");
+    assert_eq!(bar[cell(0.55)], '>', "{row}");
+
+    // 没有名字的段和第一个跳转点之前都不显示段名。
+    for at in [6 * MINUTE, 4 * MINUTE] {
+        assert!(app.playback.player.seek_to(at));
+        let (_, backend) = render(&app, 100, 24);
+        assert!(
+            !screen_rows(&backend)
+                .iter()
+                .any(|row| row.contains("正在播放·"))
+        );
+    }
+
+    // 窄终端截断名字，不挤掉标题。
+    assert!(app.playback.player.seek_to(11 * MINUTE));
+    app.dispatch(Action::OpenOverlay(Overlay::Marks));
+    app.dispatch(Action::RenameMark);
+    type_text(&mut app, "很长的名字".repeat(10).as_str());
+    app.dispatch(Action::Activate);
+    app.dispatch(Action::Back);
+    let (_, backend) = render(&app, 50, 24);
+    let rows = screen_rows(&backend);
+    let title = rows.iter().find(|row| row.contains("正在播放")).unwrap();
+    assert!(title.contains("正在播放·耳语很长的名字"), "{title}");
+    assert!(title.contains('…'), "{title}");
+}

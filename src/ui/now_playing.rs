@@ -12,7 +12,9 @@ use crate::track::Folder;
 
 use super::library::{LIST_ICON_WIDTH, playback_action_indicator};
 use super::lyrics::inline_lyric;
-use super::text::{ascii_progress_bar, fmt_duration, now_playing_text};
+use super::text::{
+    ascii_progress_bar, fmt_duration, mark_ticks, now_playing_text, truncate_display,
+};
 
 /// 解码器报告的总时长优先，其次是扫描时读到的时长。
 fn current_duration(app: &App) -> Option<Duration> {
@@ -30,6 +32,21 @@ pub(super) fn progress_ratio(app: &App) -> f64 {
         .clamp(0.0, 1.0)
 }
 
+/// 边框标题。当前所在段有名字时接在后面：放在标题里不和右边的状态栏抢宽度，
+/// 名字太长时截断。
+fn now_playing_title(app: &App, width: u16) -> String {
+    const BASE: &str = " ♫ 正在播放";
+    let name = app
+        .current_section()
+        .and_then(|index| app.current_marks()[index].name.as_deref());
+    // 去掉两个边角、“ · ”和末尾的空格。
+    let budget = usize::from(width).saturating_sub(2 + UnicodeWidthStr::width(BASE) + 3 + 1);
+    match name {
+        Some(name) if budget > 0 => format!("{BASE} · {} ", truncate_display(name, budget)),
+        _ => format!("{BASE} "),
+    }
+}
+
 /// 返回进度条自身占据的矩形，供点击跳转做命中测试。
 pub(super) fn draw_now_playing(
     frame: &mut Frame,
@@ -42,7 +59,7 @@ pub(super) fn draw_now_playing(
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(theme.border))
         .title(Span::styled(
-            " ♫ 正在播放 ",
+            now_playing_title(app, area.width),
             Style::new().fg(theme.primary).bold(),
         ));
     // 没有歌词面板时，当前歌词行借用底边显示，不占额外行。
@@ -126,6 +143,15 @@ pub(super) fn draw_now_playing(
     let bar_width =
         (rows[1].width as usize).saturating_sub(position_label.len() + duration_label.len() + 3);
     let bar = ascii_progress_bar(ratio, bar_width);
+    let bar = match duration.filter(|duration| !duration.is_zero()) {
+        Some(duration) => mark_ticks(
+            &bar,
+            app.current_marks()
+                .iter()
+                .map(|mark| mark.position.as_secs_f64() / duration.as_secs_f64()),
+        ),
+        None => bar,
+    };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(format!(" {position_label} "), Style::new().fg(theme.muted)),

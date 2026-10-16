@@ -20,7 +20,9 @@ use super::library::{
     STOPPED_ICON, duration_column_width, playback_action_indicator, track_row_text,
 };
 use super::overlays::resolve_queue_rows;
-use super::text::{ascii_progress_bar, fmt_duration, now_playing_text, truncate_display};
+use super::text::{
+    ascii_progress_bar, fmt_duration, mark_ticks, now_playing_text, truncate_display,
+};
 use super::visualizer::{frequency_color, resample_spectrum, spectrum_block, visualizer_height};
 
 #[test]
@@ -105,6 +107,15 @@ fn ascii_progress_bar_renders_head_and_completion() {
     assert_eq!(ascii_progress_bar(0.5, 1), ">");
     assert_eq!(ascii_progress_bar(1.0, 1), "=");
     assert_eq!(ascii_progress_bar(0.5, 0), "");
+}
+
+#[test]
+fn mark_ticks_mark_both_sides_of_the_playhead_but_never_hide_it() {
+    assert_eq!(mark_ticks(">---------", [0.5]), ">----|----");
+    assert_eq!(mark_ticks("=====>----", [0.2, 0.5, 0.8]), "==|==>--|-");
+    assert_eq!(mark_ticks("=====>----", [0.55]), "=====>----");
+    assert_eq!(mark_ticks("==========", [0.999]), "=========|");
+    assert_eq!(mark_ticks("", [0.5]), "");
 }
 
 #[test]
