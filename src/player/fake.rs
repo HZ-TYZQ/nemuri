@@ -172,6 +172,9 @@ impl PlaybackBackend for FakeBackend {
         true
     }
 
+    /// App 还不设停止位置；播到停止位置和自然播完一样由测试用 `finish_track` 注入。
+    fn set_stop_at(&mut self, _position: Option<Duration>) {}
+
     fn volume(&self) -> u8 {
         self.shared.borrow().volume
     }

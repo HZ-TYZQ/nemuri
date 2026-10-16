@@ -32,6 +32,8 @@ enum InternalEvent {
         /// 解码 Source 自己耗尽时的已播位置。不能在事件到达后再读
         /// `Player::position()`：队列此时已切到后续静音源，`get_pos()` 常为 0。
         position: Duration,
+        /// 停在了停止位置，而不是文件真的放完了。
+        at_stop: bool,
     },
     DeviceError(rodio::cpal::StreamError),
     RecoveryError(String),
@@ -67,6 +69,10 @@ pub struct Player {
     spectrum_live: Arc<AtomicBool>,
     is_playing: AtomicBool,
     pcm_slot: Arc<Mutex<Option<PcmBatch>>>,
+    /// App 设的停止位置；输出中断恢复时交给新的播放器。
+    stop_at: Option<Duration>,
+    /// 与正在播放的这一首共用，改停止位置时不用重新装载；没有曲目时为 None。
+    stop_point: Option<Arc<StopPoint>>,
     /// 装载、跳转或停止之后，Rodio 的计时还没赶上时用的估计值。
     pending_position: Mutex<Option<PendingPosition>>,
     // 恢复时先 seek 解码器，Rodio 的计时从接入时的 0 开始。
@@ -173,6 +179,8 @@ impl Player {
             spectrum_live,
             is_playing: AtomicBool::new(false),
             pcm_slot,
+            stop_at: None,
+            stop_point: None,
             pending_position: Mutex::new(None),
             position_offset: Mutex::new(Duration::ZERO),
             _spectrum: spectrum,
@@ -236,11 +244,10 @@ impl Player {
                 .try_seek(position)
                 .map_err(|error| format!("无法恢复播放位置: {error}"))?;
         }
-        let initial_samples = duration_to_samples(
-            position,
-            u64::from(decoder.channels().get()),
-            u64::from(decoder.sample_rate().get()),
-        );
+        let channels = u64::from(decoder.channels().get());
+        let rate = u64::from(decoder.sample_rate().get());
+        let initial_samples = duration_to_samples(position, channels, rate);
+        let stop_point = Arc::new(StopPoint::new(channels, rate));
 
         if target == PlayState::Paused {
             self.backend.pause();
@@ -265,6 +272,8 @@ impl Player {
                 generation,
                 events: self.event_tx.clone(),
                 samples: initial_samples,
+                stop: Arc::clone(&stop_point),
+                reached_stop: false,
                 signaled: false,
             },
             Arc::clone(&self.mix_control),
@@ -282,6 +291,8 @@ impl Player {
         // 两种情况都会让上层按路径找不回正在播放的曲目。
         self.current_path = Some(path.to_path_buf());
         self.current_duration = duration;
+        self.stop_at = None;
+        self.stop_point = Some(stop_point);
         *self.position_offset.lock().unwrap() = position;
         self.set_pending_position(position);
         self.is_playing
@@ -466,6 +477,8 @@ impl PlaybackBackend for Player {
         self.state = PlayState::Stopped;
         self.current_path = None;
         self.current_duration = None;
+        self.stop_at = None;
+        self.stop_point = None;
         *self.position_offset.lock().unwrap() = Duration::ZERO;
         self.set_pending_position(Duration::ZERO);
         self.is_playing.store(false, Ordering::Relaxed);
@@ -503,6 +516,13 @@ impl PlaybackBackend for Player {
             true
         } else {
             false
+        }
+    }
+
+    fn set_stop_at(&mut self, position: Option<Duration>) {
+        self.stop_at = position;
+        if let Some(stop_point) = &self.stop_point {
+            stop_point.set(position);
         }
     }
 
@@ -552,6 +572,7 @@ impl PlaybackBackend for Player {
                     player.set_muted(self.is_muted());
                     player.set_fade_gain(self.fade_gain);
                     player.set_channel_mix(self.channel_mix);
+                    player.set_stop_at(self.stop_at);
                     player.set_spectrum_enabled(self.spectrum_enabled.load(Ordering::Relaxed));
                     player.resume();
                     *self = *player;
@@ -593,11 +614,16 @@ impl PlaybackBackend for Player {
                 InternalEvent::SourceEnded {
                     generation,
                     position,
+                    at_stop,
                 } => {
                     if generation != current || self.output_unavailable() {
                         continue;
                     }
-                    let kind = classify_source_end(position, self.current_duration);
+                    let kind = if at_stop {
+                        SourceEndKind::EndOfStream
+                    } else {
+                        classify_source_end(position, self.current_duration)
+                    };
                     self.mark_stopped();
                     drained.push(match kind {
                         SourceEndKind::EndOfStream => PlayerEvent::EndOfStream,
@@ -651,12 +677,46 @@ enum SourceEndKind {
     Error,
 }
 
-/// 解码 Source 耗尽时发出结束事件，并带上按采样计数的播放位置。
+/// 停止位置，换算成这一首的采样数后与播放线程共用；没有时为 [`NO_STOP`]。
+/// 换算放在改动时做，播放线程每个采样只多比较一次。
+struct StopPoint {
+    samples: AtomicU64,
+    channels: u64,
+    rate: u64,
+}
+
+const NO_STOP: u64 = u64::MAX;
+
+impl StopPoint {
+    fn new(channels: u64, rate: u64) -> Self {
+        Self {
+            samples: AtomicU64::new(NO_STOP),
+            channels,
+            rate,
+        }
+    }
+
+    fn set(&self, position: Option<Duration>) {
+        let samples = position.map_or(NO_STOP, |position| {
+            duration_to_samples(position, self.channels, self.rate)
+        });
+        self.samples.store(samples, Ordering::Relaxed);
+    }
+
+    fn samples(&self) -> u64 {
+        self.samples.load(Ordering::Relaxed)
+    }
+}
+
+/// 解码 Source 耗尽或播到停止位置时发出结束事件，并带上按采样计数的播放位置。
 struct EndSignal<S> {
     inner: S,
     generation: u64,
     events: Sender<InternalEvent>,
     samples: u64,
+    stop: Arc<StopPoint>,
+    /// 一路播到了停止位置，下一个采样起就当作耗尽；跳转会把它清掉。
+    reached_stop: bool,
     signaled: bool,
 }
 
@@ -676,28 +736,37 @@ impl<S: Source<Item = f32>> Iterator for EndSignal<S> {
     type Item = f32;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.inner.next() {
-            Some(sample) => {
-                self.samples += 1;
-                Some(sample)
-            }
-            None => {
-                if !self.signaled {
-                    self.signaled = true;
-                    let _ = self.events.send(InternalEvent::SourceEnded {
-                        generation: self.generation,
-                        position: self.elapsed(),
-                    });
-                }
-                None
-            }
+        if !self.reached_stop
+            && let Some(sample) = self.inner.next()
+        {
+            self.samples += 1;
+            // 计数一个一个往上走才会正好等于停止位置；跳转直接把计数设到它或它之后时不会，
+            // 于是越过停止位置的跳转一直放到文件结尾。
+            self.reached_stop = self.samples == self.stop.samples();
+            return Some(sample);
         }
+        if !self.signaled {
+            self.signaled = true;
+            let _ = self.events.send(InternalEvent::SourceEnded {
+                generation: self.generation,
+                position: self.elapsed(),
+                at_stop: self.reached_stop,
+            });
+        }
+        None
     }
 }
 
 impl<S: Source<Item = f32>> Source for EndSignal<S> {
     fn current_span_len(&self) -> Option<usize> {
+        if self.reached_stop {
+            return Some(0);
+        }
         self.inner.current_span_len()
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.reached_stop || self.inner.is_exhausted()
     }
 
     fn channels(&self) -> rodio::ChannelCount {
@@ -717,6 +786,7 @@ impl<S: Source<Item = f32>> Source for EndSignal<S> {
         let channels = u64::from(self.inner.channels().get());
         let rate = u64::from(self.inner.sample_rate().get());
         self.samples = duration_to_samples(pos, channels, rate);
+        self.reached_stop = false;
         Ok(())
     }
 }
@@ -769,16 +839,13 @@ impl PendingPosition {
     }
 }
 
+/// 位置换算成采样数，落在整帧上：停止位置因此总在一帧结束处，不会只放半帧。
 fn duration_to_samples(position: Duration, channels: u64, rate: u64) -> u64 {
     if channels == 0 || rate == 0 {
         return 0;
     }
-    position
-        .as_nanos()
-        .saturating_mul(rate as u128)
-        .saturating_mul(channels as u128)
-        .checked_div(1_000_000_000)
-        .unwrap_or(0) as u64
+    let frames = position.as_nanos().saturating_mul(rate as u128) / 1_000_000_000;
+    u64::try_from(frames.saturating_mul(channels as u128)).unwrap_or(u64::MAX)
 }
 
 fn classify_source_end(position: Duration, duration: Option<Duration>) -> SourceEndKind {
@@ -903,6 +970,16 @@ mod tests {
         assert_eq!(output_volume(80, false, 2.0), 0.8);
         assert_eq!(output_volume(80, false, -1.0), 0.0);
         assert_eq!(output_volume(80, false, f32::NAN), 0.8);
+    }
+
+    #[test]
+    fn positions_become_whole_frames_of_samples() {
+        // 1.5 秒、44.1 kHz 立体声：66150 帧。
+        assert_eq!(duration_to_samples(ms(1_500), 2, 44_100), 132_300);
+        // 落在两帧之间时取前一帧的开头，不会停在半帧上。
+        let between = Duration::from_nanos(1_000_000_000 / 44_100 * 3 + 7_000);
+        assert_eq!(duration_to_samples(between, 2, 44_100), 6);
+        assert_eq!(duration_to_samples(ms(1_500), 0, 44_100), 0);
     }
 
     #[test]
