@@ -30,6 +30,8 @@ pub struct AppPaths {
     pub session_file: PathBuf,
     /// 长录音各自的收听进度。
     pub progress_file: PathBuf,
+    /// 长录音各自的跳转点。
+    pub marks_file: PathBuf,
     pub cache_db: PathBuf,
     pub default_music_dir: Option<PathBuf>,
     /// 改名前的配置和数据目录，以及各自对应的新目录（见 [`adopt_previous_dirs`]）。
@@ -61,6 +63,7 @@ impl AppPaths {
             playlists_dir: data.join(APP_DIR).join("playlists"),
             session_file: data.join(APP_DIR).join("session.toml"),
             progress_file: data.join(APP_DIR).join("progress.json"),
+            marks_file: data.join(APP_DIR).join("marks.json"),
             cache_db: cache.join(APP_DIR).join("library.sqlite3"),
             default_music_dir: music,
             renamed_dirs,
@@ -261,6 +264,7 @@ mod tests {
             paths.progress_file,
             PathBuf::from("/data/nemuri/progress.json")
         );
+        assert_eq!(paths.marks_file, PathBuf::from("/data/nemuri/marks.json"));
         assert_eq!(paths.default_music_dir, Some(PathBuf::from("/music")));
     }
 
