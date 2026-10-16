@@ -1,7 +1,7 @@
 //! 测试用的假后端：不解码、不出声。
 //!
 //! 文件存在、非空且以 `RIFF` 开头就当作能播放；位置只在跳转时改变；
-//! 曲目播完、解码出错和输出中断都由测试通过 [`FakeControl`] 注入。
+//! 曲目播完（包括播到停止位置）、解码出错和输出中断都由测试通过 [`FakeControl`] 注入。
 //! 输出中断后的恢复与 Rodio 后端一致：`resume` 发起，下一次取事件时完成。
 
 use std::cell::RefCell;
@@ -16,6 +16,7 @@ use super::{ChannelMix, PlayState, PlaybackBackend, PlayerEvent};
 struct FakeState {
     state: PlayState,
     position: Duration,
+    stop_at: Option<Duration>,
     volume: u8,
     muted: bool,
     fade_gain: f32,
@@ -39,6 +40,7 @@ impl FakeBackend {
         let state = Rc::new(RefCell::new(FakeState {
             state: PlayState::Stopped,
             position: Duration::ZERO,
+            stop_at: None,
             volume: 100,
             muted: false,
             fade_gain: 1.0,
@@ -65,6 +67,7 @@ impl FakeBackend {
         }
         state.state = target;
         state.position = position;
+        state.stop_at = None;
         self.current = Some(path.to_path_buf());
         Ok(())
     }
@@ -79,6 +82,11 @@ impl FakeControl {
     /// 最近一次设置的左右平衡与声道互换。
     pub(crate) fn channel_mix(&self) -> ChannelMix {
         self.0.borrow().channel_mix
+    }
+
+    /// App 最近一次设的停止位置；装载新曲目和停止时清掉。
+    pub(crate) fn stop_at(&self) -> Option<Duration> {
+        self.0.borrow().stop_at
     }
 
     /// 当前曲目自然播完。
@@ -151,6 +159,7 @@ impl PlaybackBackend for FakeBackend {
         state.recovering = false;
         state.state = PlayState::Stopped;
         state.position = Duration::ZERO;
+        state.stop_at = None;
         self.current = None;
     }
 
@@ -172,8 +181,9 @@ impl PlaybackBackend for FakeBackend {
         true
     }
 
-    /// App 还不设停止位置；播到停止位置和自然播完一样由测试用 `finish_track` 注入。
-    fn set_stop_at(&mut self, _position: Option<Duration>) {}
+    fn set_stop_at(&mut self, position: Option<Duration>) {
+        self.shared.borrow_mut().stop_at = position;
+    }
 
     fn volume(&self) -> u8 {
         self.shared.borrow().volume

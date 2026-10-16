@@ -6,6 +6,7 @@
 
 use std::time::Duration;
 
+use crate::marks::Role;
 use crate::media::MediaCommand;
 use crate::track::RepeatMode;
 
@@ -26,6 +27,8 @@ pub enum Action {
     SeekBy(i64),
     /// 按总时长的比例跳转，0.0–1.0。
     SeekToRatio(f64),
+    /// `0`：有起点时先回到起点，已经在起点附近或之前时回到 0:00。
+    SeekToStart,
     /// 跳到绝对位置；带曲目 ID 时只在它仍是当前曲目时生效。
     SeekTo {
         position: Duration,
@@ -100,6 +103,8 @@ pub enum Action {
     RemoveMark,
     /// 打开给选中跳转点改名的输入框。
     RenameMark,
+    /// 把选中的跳转点设为起点或终点；已经是了就取消。
+    ToggleMarkRole(Role),
 }
 
 impl From<MediaCommand> for Action {
@@ -131,6 +136,7 @@ impl App {
             Action::Previous => self.play_previous(),
             Action::SeekBy(offset) => self.seek_rel_micros(offset),
             Action::SeekToRatio(ratio) => self.seek_to_ratio(ratio),
+            Action::SeekToStart => self.seek_to_start(),
             Action::SeekTo { position, track_id } => {
                 self.seek_to_requested(position, track_id.as_deref());
             }
@@ -212,6 +218,7 @@ impl App {
             Action::NextMark => self.jump_to_next_mark(),
             Action::RemoveMark => self.remove_selected_mark(),
             Action::RenameMark => self.start_renaming_mark(),
+            Action::ToggleMarkRole(role) => self.toggle_selected_mark_role(role),
         }
         // 系统媒体控制可能刚切了歌，跳转点面板要跟上。
         self.sync_marks_panel();

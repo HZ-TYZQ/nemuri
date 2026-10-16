@@ -137,9 +137,9 @@ pub(super) const LIBRARY: &[Binding] = &[
     ),
     listed(
         "0–9",
-        "跳到 0% – 90% 位置",
+        "跳到 0% – 90% 位置（有起点时 0 先回到起点）",
         &[
-            (ch('0'), Action::SeekToRatio(0.0)),
+            (ch('0'), Action::SeekToStart),
             (ch('1'), Action::SeekToRatio(0.1)),
             (ch('2'), Action::SeekToRatio(0.2)),
             (ch('3'), Action::SeekToRatio(0.3)),

@@ -4,8 +4,10 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::config::{AppConfig, AppPaths};
+use crate::marks::Role;
 use crate::player::fake::{FakeBackend, FakeControl};
 use crate::player::{ChannelMix, PlayState, PlaybackBackend, Player};
+use crate::progress::Listened;
 use crate::track::{Folder, RepeatMode, SortKey, Track};
 
 use crate::ui::{MouseInput, ViewLayout};
@@ -3599,4 +3601,375 @@ fn an_unreadable_marks_file_is_left_alone_and_b_explains_why() {
 
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
     assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+}
+
+/// rec1 在 2、5、15、18 分钟有跳转点，2:00 是起点、18:00 是终点（都在面板里设），
+/// 播放中停在 `at`；返回三个曲目的路径。
+fn bounds_fixture(app: &mut App, music: &Path, at: Duration) -> Vec<PathBuf> {
+    let paths = marks_fixture(app, music, &[2, 5, 15, 18], at);
+    set_role(app, 0, 's');
+    set_role(app, 3, 'S');
+    paths
+}
+
+/// 打开跳转点面板，在第 `row` 行按 `s`（起点）或 `S`（终点），再关掉面板。
+fn set_role(app: &mut App, row: usize, character: char) {
+    press(app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(row));
+    app.dispatch(Action::ToggleMarkRole(match character {
+        's' => Role::Start,
+        _ => Role::End,
+    }));
+    press(app, key(KeyCode::Esc));
+}
+
+const START_POINT: Duration = Duration::from_secs(2 * 60);
+const END_POINT: Duration = Duration::from_secs(18 * 60);
+
+#[test]
+fn a_recording_that_would_start_at_0_00_starts_at_its_start_point() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), MINUTE);
+    assert_eq!(control.stop_at(), Some(END_POINT));
+
+    // 没听过（停在起点之前离开，不记进度）：从起点开始，终点交给播放器。
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(control.stop_at(), None);
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), START_POINT);
+    assert_eq!(app.player().state(), PlayState::Playing);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已跳过开头，从起点 2:00 开始")
+    );
+    assert_eq!(control.stop_at(), Some(END_POINT));
+
+    // 听到一半：照常续播，提示 0 回到起点。
+    assert!(app.playback.player.seek_to(10 * MINUTE));
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), 10 * MINUTE);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("从 10:00 继续（按 0 回到起点）")
+    );
+
+    // 跳过终点去听片尾再离开：算听完，下次从起点开始；马上离开也不抹掉“听完”。
+    assert!(app.playback.player.seek_to(19 * MINUTE));
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    let rec1 = app.catalog.tracks()[0].clone();
+    assert_eq!(app.listened(&rec1), Some(Listened::Finished));
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), START_POINT);
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.listened(&rec1), Some(Listened::Finished));
+}
+
+#[test]
+fn progress_saved_before_the_start_or_end_was_set_still_skips_the_ends() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(
+        &mut app,
+        &temp.path().join("music"),
+        &[2, 18],
+        START_POINT + Duration::from_secs(1),
+    );
+    let rec1 = app.catalog.tracks()[0].clone();
+    // 2:01 记下的进度，之后才把 2:00 设为起点：还算没开始听。
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    app.marks.store.toggle_role(&rec1, 0, Role::Start).unwrap();
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), START_POINT);
+
+    // 17:58 记下的进度，之后才把 18:00 设为终点：已在终点前 3 秒以内，算听完。
+    assert!(
+        app.playback
+            .player
+            .seek_to(END_POINT - Duration::from_secs(2))
+    );
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(
+        app.listened(&rec1),
+        Some(Listened::InProgress(END_POINT - Duration::from_secs(2)))
+    );
+    app.marks.store.toggle_role(&rec1, 1, Role::End).unwrap();
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(app.player().position(), START_POINT);
+}
+
+#[test]
+fn reaching_the_end_point_ends_the_track_like_a_natural_end() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::None,
+        ..AppConfig::default()
+    });
+    bounds_fixture(&mut app, &temp.path().join("music"), 10 * MINUTE);
+    let rec1 = app.catalog.tracks()[0].clone();
+
+    // 播放器在终点报告播完：记为听完，接下一首；rec2 没有终点。
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.listened(&rec1), Some(Listened::Finished));
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.stop_at(), None);
+
+    // 播完停止：停下并说明。
+    app.config.repeat = RepeatMode::Stop;
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已播完，播放停止（按 z 切换循环方式）")
+    );
+}
+
+#[test]
+fn repeat_one_loops_from_the_start_point_to_the_end_point() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::One,
+        ..AppConfig::default()
+    });
+    bounds_fixture(&mut app, &temp.path().join("music"), 10 * MINUTE);
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.playback.playing_index, Some(0));
+    assert_eq!(app.player().position(), START_POINT);
+    // 重新装载后终点又交给了播放器。
+    assert_eq!(control.stop_at(), Some(END_POINT));
+}
+
+#[test]
+fn jumping_past_the_end_point_leaves_the_stop_to_the_player() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), 17 * MINUTE);
+    // 播放器只在一路播到终点时停：跳过去、跳回来，App 都不用改停止位置。
+    press(&mut app, key(KeyCode::Char('L')));
+    assert_eq!(app.player().position(), 17 * MINUTE + MINUTE);
+    press(&mut app, key(KeyCode::Char('L')));
+    assert_eq!(app.player().position(), 19 * MINUTE);
+    assert_eq!(app.player().state(), PlayState::Playing);
+    assert_eq!(control.stop_at(), Some(END_POINT));
+    press(&mut app, key(KeyCode::Char('H')));
+    press(&mut app, key(KeyCode::Char('H')));
+    assert_eq!(control.stop_at(), Some(END_POINT));
+}
+
+#[test]
+fn zero_goes_to_the_start_point_first_and_then_to_0_00() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), 10 * MINUTE);
+    let zero = key(KeyCode::Char('0'));
+
+    app.drain_media_events();
+    press(&mut app, zero);
+    assert_eq!(app.player().position(), START_POINT);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("回到起点 2:00（再按 0 从 0:00 播放）")
+    );
+    assert!(!app.drain_media_events().is_empty());
+    press(&mut app, zero);
+    assert_eq!(app.player().position(), Duration::ZERO);
+    assert_eq!(app.view.message.as_deref(), Some("跳到开头"));
+
+    // 起点后 3 秒以内、起点之前：回到 0:00。
+    for at in [START_POINT + Duration::from_secs(2), MINUTE] {
+        assert!(app.playback.player.seek_to(at));
+        press(&mut app, zero);
+        assert_eq!(app.player().position(), Duration::ZERO);
+    }
+
+    // 暂停中照常跳，仍是暂停；有名字时提示带上名字。
+    press(&mut app, key(KeyCode::Char('B')));
+    press(&mut app, key(KeyCode::Char('e')));
+    type_text(&mut app, "正片");
+    press(&mut app, key(KeyCode::Enter));
+    press(&mut app, key(KeyCode::Esc));
+    press(&mut app, key(KeyCode::Char(' ')));
+    assert!(app.playback.player.seek_to(10 * MINUTE));
+    press(&mut app, zero);
+    assert_eq!(app.player().position(), START_POINT);
+    assert_eq!(app.player().state(), PlayState::Paused);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("回到起点 2:00 正片（再按 0 从 0:00 播放）")
+    );
+
+    // 没有起点的录音和短曲目：和以前一样回到 0:00，不提示。
+    for index in [1, 2] {
+        app.play_index(index, true, BagUpdate::Reanchor).unwrap();
+        assert!(app.playback.player.seek_to(Duration::from_secs(50)));
+        app.view.message = None;
+        press(&mut app, zero);
+        assert_eq!(app.player().position(), Duration::ZERO);
+        assert_eq!(app.view.message, None);
+    }
+}
+
+#[test]
+fn the_panel_sets_and_clears_the_start_and_end_points() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    marks_fixture(
+        &mut app,
+        &temp.path().join("music"),
+        &[2, 5, 15, 18],
+        10 * MINUTE,
+    );
+    let file = temp.path().join("data/nemuri/marks.json");
+    let message = |app: &App| app.view.message.clone().unwrap();
+
+    set_role(&mut app, 0, 's');
+    assert_eq!(message(&app), "已设为起点 2:00，以后从头播放时从这里开始");
+    set_role(&mut app, 3, 'S');
+    assert_eq!(message(&app), "已设为终点 18:00，以后播到这里就算播完");
+    assert_eq!(control.stop_at(), Some(END_POINT));
+    let saved = std::fs::read_to_string(&file).unwrap();
+    assert!(saved.contains("\"start\": true") && saved.contains("\"end\": true"));
+
+    // 先后不对：只提示，不改。
+    set_role(&mut app, 3, 's');
+    assert_eq!(
+        message(&app),
+        "已把终点 18:00 改为起点，以后从这里开始，播到文件结尾"
+    );
+    assert_eq!(control.stop_at(), None);
+    set_role(&mut app, 2, 'S');
+    assert_eq!(message(&app), "终点要在起点 18:00 之后");
+    set_role(&mut app, 1, 's');
+    assert_eq!(message(&app), "已设为起点 5:00，以后从头播放时从这里开始");
+    set_role(&mut app, 3, 'S');
+    assert_eq!(message(&app), "已设为终点 18:00，以后播到这里就算播完");
+    set_role(&mut app, 3, 's');
+    assert_eq!(
+        message(&app),
+        "已把终点 18:00 改为起点，以后从这里开始，播到文件结尾"
+    );
+    set_role(&mut app, 1, 'S');
+    assert_eq!(message(&app), "终点要在起点 18:00 之后");
+    set_role(&mut app, 3, 'S');
+    assert_eq!(
+        message(&app),
+        "已把起点 18:00 改为终点，以后从 0:00 开始，播到这里就算播完"
+    );
+    set_role(&mut app, 2, 'S');
+    assert_eq!(message(&app), "已设为终点 15:00，以后播到这里就算播完");
+    set_role(&mut app, 3, 's');
+    assert_eq!(message(&app), "起点要在终点 15:00 之前");
+
+    // 再按一次取消。
+    set_role(&mut app, 2, 'S');
+    assert_eq!(message(&app), "已取消终点，以后播到文件结尾");
+    set_role(&mut app, 0, 's');
+    set_role(&mut app, 0, 's');
+    assert_eq!(message(&app), "已取消起点，以后从 0:00 开始");
+    assert_eq!(control.stop_at(), None);
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("true"));
+
+    // 删掉起点或终点，起点或终点也就没了。
+    set_role(&mut app, 0, 's');
+    set_role(&mut app, 3, 'S');
+    press(&mut app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(3));
+    press(&mut app, key(KeyCode::Char('d')));
+    assert_eq!(message(&app), "已删除终点 18:00，以后播到文件结尾");
+    assert_eq!(control.stop_at(), None);
+    app.dispatch(Action::SelectRow(0));
+    press(&mut app, key(KeyCode::Char('d')));
+    assert_eq!(message(&app), "已删除起点 2:00，以后从 0:00 开始");
+    assert_eq!(mark_positions(&app), [5 * MINUTE, 15 * MINUTE]);
+}
+
+#[test]
+fn panel_jumps_name_the_start_and_end_points() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), 10 * MINUTE);
+    press(&mut app, key(KeyCode::Char('}')));
+    assert_eq!(app.view.message.as_deref(), Some("跳到 15:00"));
+    press(&mut app, key(KeyCode::Char('}')));
+    assert_eq!(app.view.message.as_deref(), Some("跳到终点 18:00"));
+    press(&mut app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(0));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.message.as_deref(), Some("跳到起点 2:00"));
+}
+
+#[test]
+fn a_restored_session_near_or_past_the_end_point_goes_back_to_the_start_point() {
+    for (left_at, restored_at) in [
+        (END_POINT + MINUTE, START_POINT),
+        (END_POINT - Duration::from_secs(2), START_POINT),
+        // 其他位置照原样恢复，起点之前也一样。
+        (10 * MINUTE, 10 * MINUTE),
+        (MINUTE, MINUTE),
+    ] {
+        let (temp, mut app) = test_app(AppConfig::default());
+        let music = temp.path().join("music");
+        bounds_fixture(&mut app, &music, left_at);
+        app.save_session().unwrap();
+        drop(app);
+
+        let (backend, control) = FakeBackend::new();
+        let mut app = app_with_backend(
+            temp.path(),
+            "music",
+            AppConfig::default(),
+            Box::new(backend),
+        );
+        recordings_fixture(&mut app, &music);
+        let tracks = app.catalog.tracks().to_vec();
+        app.apply_scan_finished(tracks, Vec::new());
+        assert_eq!(app.player().position(), restored_at, "上次停在 {left_at:?}");
+        assert_eq!(control.stop_at(), Some(END_POINT));
+    }
+}
+
+#[test]
+fn the_track_end_timer_fades_out_before_the_end_point() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), 10 * MINUTE);
+    sleep_at_track_end(&mut app);
+
+    assert!(
+        app.playback
+            .player
+            .seek_to(END_POINT - Duration::from_secs(15))
+    );
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 0.25);
+    // 跳过了终点：一直放到文件结尾，按离结尾的时间淡出。
+    assert!(app.playback.player.seek_to(END_POINT + MINUTE));
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert!(
+        app.playback
+            .player
+            .seek_to(20 * MINUTE - Duration::from_secs(15))
+    );
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 0.25);
+
+    // 播到终点：停止，不接下一首。
+    assert!(app.playback.player.seek_to(10 * MINUTE));
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("睡眠定时：本条已播完，播放停止")
+    );
+}
+
+#[test]
+fn an_end_point_past_a_shortened_file_no_longer_stops_playback() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), 10 * MINUTE);
+    assert_eq!(control.stop_at(), Some(END_POINT));
+    // 重扫时文件变成 17 分钟：18:00 的终点不显示，也不再生效。
+    let mut tracks = app.catalog.tracks().to_vec();
+    tracks[0].duration = Some(17 * MINUTE);
+    app.apply_scan_finished(tracks, Vec::new());
+    assert_eq!(mark_positions(&app), [2 * MINUTE, 5 * MINUTE, 15 * MINUTE]);
+    assert_eq!(control.stop_at(), None);
 }

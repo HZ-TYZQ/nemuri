@@ -1,15 +1,18 @@
-//! 长录音的跳转点：在当前位置添加、跳到上一个或下一个，以及跳转点面板和改名。
+//! 长录音的跳转点：在当前位置添加、跳到上一个或下一个，以及跳转点面板、改名和起点终点。
 //!
 //! 跳转点只对正在播放或暂停中的长录音生效；停止状态没有位置可记、可跳，只给提示。
 //! 改动后立刻写盘；写不了时提示，下次改动和退出时再写。
+//!
+//! 起点和终点是标了角色的跳转点。起点在装载时用（见 `progress.rs` 的 `opening`）；
+//! 终点交给播放器作停止位置，播到那里就和自然播完一样接下一首。
 
 use std::path::Path;
 use std::time::Duration;
 
-use crate::marks::{self, AddError, Bounds, Mark, MarkStore};
+use crate::marks::{self, AddError, Bounds, Mark, MarkStore, Role, RoleError};
 use crate::player::PlayState;
 use crate::progress;
-use crate::track::fmt_duration;
+use crate::track::{Track, fmt_duration};
 
 use super::{App, Overlay};
 
@@ -34,10 +37,19 @@ impl Marks {
 }
 
 /// 提示里怎么称呼一个跳转点：时间，有名字时后接名字。
-fn label(mark: &Mark) -> String {
+pub(super) fn label(mark: &Mark) -> String {
     match &mark.name {
         Some(name) => format!("{} {name}", fmt_duration(mark.position)),
         None => fmt_duration(mark.position),
+    }
+}
+
+/// 跳到一个跳转点时的提示；起点和终点点明身份，例如“跳到起点 1:30 正片”。
+fn jumped_to(mark: &Mark) -> String {
+    match mark.role {
+        Role::Plain => format!("跳到 {}", label(mark)),
+        Role::Start => format!("跳到起点 {}", label(mark)),
+        Role::End => format!("跳到终点 {}", label(mark)),
     }
 }
 
@@ -71,6 +83,24 @@ impl App {
     /// 当前曲目的起点和终点（时长以内的）；用不了跳转点时都没有。
     pub(super) fn current_bounds(&self) -> Bounds {
         marks::bounds(self.current_marks())
+    }
+
+    /// 曲库里一首曲目的跳转点，按扫描时的时长截取；装载之前用。不是长录音时为空。
+    pub(super) fn marks_of(&self, track: &Track) -> &[Mark] {
+        match track.duration {
+            Some(duration) if progress::is_long(track) => {
+                marks::within(self.marks.store.marks(&track.path), duration)
+            }
+            _ => &[],
+        }
+    }
+
+    /// 把当前曲目的终点交给播放器，播到那里就当作播完；没有终点时清掉。
+    /// 装载之后和终点可能变了之后调用。跳转之后不用管：播放器只在一路播到终点时停，
+    /// 跳到终点或终点之后就一直放到文件结尾，跳回终点之前又会在终点停。
+    pub(super) fn apply_stop(&mut self) {
+        let end = self.current_bounds().end;
+        self.playback.player.set_stop_at(end);
     }
 
     /// 当前位置所在的那一段：第几个跳转点；还没到第一个时为 None。
@@ -118,10 +148,7 @@ impl App {
     pub(super) fn jump_to_previous_mark(&mut self) {
         let jump = self.marks_in_reach().map(|marks| {
             match marks::previous_target(marks, self.playback.player.position()) {
-                Some(index) => (
-                    marks[index].position,
-                    format!("跳到 {}", label(&marks[index])),
-                ),
+                Some(index) => (marks[index].position, jumped_to(&marks[index])),
                 None => (Duration::ZERO, "跳到开头".to_owned()),
             }
         });
@@ -134,17 +161,32 @@ impl App {
     pub(super) fn jump_to_next_mark(&mut self) {
         let jump = self.marks_in_reach().and_then(|marks| {
             marks::next_target(marks, self.playback.player.position())
-                .map(|index| {
-                    (
-                        marks[index].position,
-                        format!("跳到 {}", label(&marks[index])),
-                    )
-                })
+                .map(|index| (marks[index].position, jumped_to(&marks[index])))
                 .ok_or("后面没有跳转点")
         });
         match jump {
             Ok((position, message)) => self.jump_to(position, message),
             Err(reason) => self.view.message = Some(reason.to_owned()),
+        }
+    }
+
+    /// `0`：有起点时先回到起点；已经在起点后 3 秒以内或起点之前时回到 0:00，
+    /// 所以连按两次总是回到 0:00。没有起点时和以前一样回到 0:00，不提示。
+    pub(super) fn seek_to_start(&mut self) {
+        let start = self
+            .current_marks()
+            .iter()
+            .find(|mark| mark.role == Role::Start)
+            .cloned();
+        let Some(start) = start else {
+            self.seek_to_ratio(0.0);
+            return;
+        };
+        if start.position + marks::PREVIOUS_GRACE <= self.playback.player.position() {
+            let message = format!("回到起点 {}（再按 0 从 0:00 播放）", label(&start));
+            self.jump_to(start.position, message);
+        } else {
+            self.jump_to(Duration::ZERO, "跳到开头".to_owned());
         }
     }
 
@@ -178,7 +220,7 @@ impl App {
         let Some(mark) = self.current_marks().get(self.view.marks_selected) else {
             return;
         };
-        let (position, message) = (mark.position, format!("跳到 {}", label(mark)));
+        let (position, message) = (mark.position, jumped_to(mark));
         self.view.overlay = Overlay::None;
         self.jump_to(position, message);
     }
@@ -191,14 +233,74 @@ impl App {
         let Some(removed) = self.marks.store.remove(track, self.view.marks_selected) else {
             return;
         };
-        let message = if self.current_marks().is_empty() {
+        let last = self.current_marks().is_empty();
+        if last {
             self.view.overlay = Overlay::None;
-            format!("已删除最后一个跳转点 {}", label(&removed))
         } else {
             self.view.marks_selected = self.view.marks_selected.min(self.current_marks().len() - 1);
-            format!("已删除跳转点 {}", label(&removed))
+        }
+        let message = match removed.role {
+            Role::Start => format!("已删除起点 {}，以后从 0:00 开始", label(&removed)),
+            Role::End => format!("已删除终点 {}，以后播到文件结尾", label(&removed)),
+            Role::Plain if last => format!("已删除最后一个跳转点 {}", label(&removed)),
+            Role::Plain => format!("已删除跳转点 {}", label(&removed)),
         };
         self.save_marks_now(message);
+        self.apply_stop();
+    }
+
+    /// 面板里的 `s` / `S`：把选中的跳转点设为起点或终点，已经是了就取消。
+    pub(super) fn toggle_selected_mark_role(&mut self, role: Role) {
+        let Ok(index) = self.mark_target() else {
+            return;
+        };
+        let Some(mark) = self.current_marks().get(self.view.marks_selected).cloned() else {
+            return;
+        };
+        let track = &self.catalog.tracks()[index];
+        let at = label(&mark);
+        match self
+            .marks
+            .store
+            .toggle_role(track, self.view.marks_selected, role)
+        {
+            Ok(change) => {
+                let message = match (change.role, change.was) {
+                    (Role::Start, Role::End) => {
+                        format!("已把终点 {at} 改为起点，以后从这里开始，播到文件结尾")
+                    }
+                    (Role::End, Role::Start) => {
+                        format!("已把起点 {at} 改为终点，以后从 0:00 开始，播到这里就算播完")
+                    }
+                    (Role::Start, _) => format!("已设为起点 {at}，以后从头播放时从这里开始"),
+                    (Role::End, _) => format!("已设为终点 {at}，以后播到这里就算播完"),
+                    (Role::Plain, Role::Start) => "已取消起点，以后从 0:00 开始".to_owned(),
+                    (Role::Plain, _) => "已取消终点，以后播到文件结尾".to_owned(),
+                };
+                self.save_marks_now(message);
+                self.apply_stop();
+            }
+            Err(RoleError::Missing) => {}
+            Err(RoleError::StartNotBeforeEnd(end)) => {
+                let end = self.role_label(Role::End, end);
+                self.view.message = Some(format!("起点要在终点 {end} 之前"));
+            }
+            Err(RoleError::EndNotAfterStart(Some(start))) => {
+                let start = self.role_label(Role::Start, start);
+                self.view.message = Some(format!("终点要在起点 {start} 之后"));
+            }
+            Err(RoleError::EndNotAfterStart(None)) => {
+                self.view.message = Some("终点要在 0:00 之后".to_owned());
+            }
+        }
+    }
+
+    /// 当前曲目的起点或终点在提示里的称呼；找不到时只写时间。
+    fn role_label(&self, role: Role, position: Duration) -> String {
+        self.current_marks()
+            .iter()
+            .find(|mark| mark.role == role)
+            .map_or_else(|| fmt_duration(position), label)
     }
 
     /// 打开改名输入框，预填现有的名字。
@@ -247,7 +349,8 @@ impl App {
         self.view.marks_selected = self.view.marks_selected.min(count - 1);
     }
 
-    /// 扫描后把改了名的文件的跳转点跟过去。
+    /// 扫描后把改了名的文件的跳转点跟过去。正在放的曲目的跳转点或时长可能随之变了，
+    /// 终点重新交给播放器。
     pub(super) fn follow_renamed_marks(&mut self) {
         if self
             .marks
@@ -256,6 +359,7 @@ impl App {
         {
             self.save_marks_now(String::new());
         }
+        self.apply_stop();
     }
 
     /// 改动后立刻写盘，写成了显示 `message`（为空时不动底栏）。
