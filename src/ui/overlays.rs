@@ -117,7 +117,11 @@ fn draw_playlists(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListVi
             .all()
             .iter()
             .map(|playlist| {
-                ListItem::new(format!("{}  ({} 首)", playlist.name, playlist.tracks.len()))
+                ListItem::new(format!(
+                    "{}  ({} 首)",
+                    playlist.name,
+                    playlist.entries.len()
+                ))
             })
             .collect()
     };
@@ -151,7 +155,8 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut 
             Style::new().fg(theme.primary).bold(),
         ))
         .border_style(Style::new().fg(theme.border));
-    let items = playlist.tracks.iter().map(|path| {
+    let items = playlist.entries.iter().map(|entry| {
+        let path = &entry.path;
         let missing = !path.is_file();
         let name = path
             .file_name()
@@ -172,9 +177,9 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut 
     let list = List::new(items)
         .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
         .highlight_style(Style::new().bg(theme.selection_bg).bold());
-    let selected = (!playlist.tracks.is_empty()).then_some(app.view().playlist_track_selected);
+    let selected = (!playlist.entries.is_empty()).then_some(app.view().playlist_track_selected);
     frame.render_stateful_widget(list, viewport, view.state_for(selected));
-    view.record(viewport, playlist.tracks.len());
+    view.record(viewport, playlist.entries.len());
     let help = help_row(inner);
     frame.render_widget(
         Paragraph::new(keymap::hints(PLAYLIST_TRACKS)).style(Style::new().fg(theme.muted)),

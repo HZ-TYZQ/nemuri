@@ -3097,7 +3097,8 @@ fn several_startup_notes_all_show_on_screen() {
     for (width, height) in [(100, 30), (80, 24)] {
         let (_, backend) = render(&app, width, height);
         let screen = screen_rows(&backend).join("");
-        for expected in ["无法读取", "从空记录开始", "确认无误后可以删除"] {
+        for expected in ["播放列表文件无法识别", "从空记录开始", "确认无误后可以删除"]
+        {
             assert!(
                 screen.contains(expected),
                 "{width}×{height} 缺少“{expected}”：\n{screen}"
@@ -4055,4 +4056,51 @@ fn a_start_point_past_a_shortened_file_does_not_block_a_new_end_point() {
         Some("已设为终点 15:00，以后播到这里就算播完")
     );
     assert_eq!(control.stop_at(), Some(15 * MINUTE));
+}
+
+#[test]
+fn adding_a_track_twice_to_a_playlist_is_allowed_with_a_note() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let song = temp.path().join("music/a.wav");
+    app.catalog.set_tracks(vec![track(song.clone())]);
+    app.playlists.create("睡前").unwrap();
+    app.view.overlay = Overlay::Playlists;
+
+    press(&mut app, key(KeyCode::Char('a')));
+    assert_eq!(app.view.message.as_deref(), Some("已加入“睡前”"));
+    press(&mut app, key(KeyCode::Char('a')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已加入“睡前”（列表里已有这首，现在有 2 条）")
+    );
+    let reloaded = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
+    assert_eq!(reloaded.all()[0].entries.len(), 2);
+}
+
+#[test]
+fn a_playlist_change_that_cannot_be_saved_is_kept_and_saved_on_exit() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let song = temp.path().join("music/a.wav");
+    app.catalog.set_tracks(vec![track(song.clone())]);
+    app.playlists.create("x").unwrap();
+    app.view.overlay = Overlay::Playlists;
+    // 列表文件的位置被一个目录占住，写盘会失败。
+    let file = app.paths.playlists_dir.join("78.json");
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+
+    press(&mut app, key(KeyCode::Char('a')));
+    let message = app.view.message.clone().unwrap();
+    assert!(
+        message.starts_with("已加入“x”，但无法保存播放列表“x”")
+            && message.ends_with("；之后改动或退出时再试"),
+        "{message}"
+    );
+    assert_eq!(app.playlists.all()[0].entries.len(), 1);
+    assert!(app.save_playlists().is_err());
+
+    std::fs::remove_dir(&file).unwrap();
+    app.save_playlists().unwrap();
+    let reloaded = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
+    assert_eq!(reloaded.all()[0].entries[0].path, song);
 }

@@ -205,7 +205,7 @@ pub(crate) fn save_json<R: Serialize>(path: &Path, what: &str, raw: &R) -> io::R
 }
 
 /// 用不了的记录文件改名留在原处，返回改成的路径。
-fn preserve_unreadable(path: &Path) -> io::Result<PathBuf> {
+pub(crate) fn preserve_unreadable(path: &Path) -> io::Result<PathBuf> {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
