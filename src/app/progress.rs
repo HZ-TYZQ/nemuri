@@ -64,7 +64,10 @@ impl App {
             return;
         };
         let position = self.playback.player.position();
-        if self.progress.store.record(track, position, duration) {
+        let bounds = self.current_bounds();
+        let start = bounds.start.unwrap_or_default();
+        let end = bounds.end.unwrap_or(duration);
+        if self.progress.store.record(track, position, start, end) {
             self.progress.dirty = true;
         }
     }

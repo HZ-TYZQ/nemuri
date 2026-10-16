@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use crate::marks::{self, AddError, Mark, MarkStore};
+use crate::marks::{self, AddError, Bounds, Mark, MarkStore};
 use crate::player::PlayState;
 use crate::progress;
 use crate::track::fmt_duration;
@@ -66,6 +66,11 @@ impl App {
             self.marks.store.marks(&self.catalog.tracks()[index].path),
             duration,
         )
+    }
+
+    /// 当前曲目的起点和终点（时长以内的）；用不了跳转点时都没有。
+    pub(super) fn current_bounds(&self) -> Bounds {
+        marks::bounds(self.current_marks())
     }
 
     /// 当前位置所在的那一段：第几个跳转点；还没到第一个时为 None。
