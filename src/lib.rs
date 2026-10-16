@@ -1,6 +1,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+mod file_records;
 pub mod library;
 pub mod lyrics;
 pub mod media;
