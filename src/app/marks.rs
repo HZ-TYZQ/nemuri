@@ -257,12 +257,16 @@ impl App {
         let Some(mark) = self.current_marks().get(self.view.marks_selected).cloned() else {
             return;
         };
+        // 有跳转点可选就有时长，和面板一样按它截取。
+        let Some(duration) = self.effective_duration() else {
+            return;
+        };
         let track = &self.catalog.tracks()[index];
         let at = label(&mark);
         match self
             .marks
             .store
-            .toggle_role(track, self.view.marks_selected, role)
+            .toggle_role(track, self.view.marks_selected, role, duration)
         {
             Ok(change) => {
                 let message = match (change.role, change.was) {

@@ -3674,7 +3674,10 @@ fn progress_saved_before_the_start_or_end_was_set_still_skips_the_ends() {
     let rec1 = app.catalog.tracks()[0].clone();
     // 2:01 记下的进度，之后才把 2:00 设为起点：还算没开始听。
     app.play_index(1, true, BagUpdate::Reanchor).unwrap();
-    app.marks.store.toggle_role(&rec1, 0, Role::Start).unwrap();
+    app.marks
+        .store
+        .toggle_role(&rec1, 0, Role::Start, 20 * MINUTE)
+        .unwrap();
     app.play_index(0, true, BagUpdate::Reanchor).unwrap();
     assert_eq!(app.player().position(), START_POINT);
 
@@ -3689,7 +3692,10 @@ fn progress_saved_before_the_start_or_end_was_set_still_skips_the_ends() {
         app.listened(&rec1),
         Some(Listened::InProgress(END_POINT - Duration::from_secs(2)))
     );
-    app.marks.store.toggle_role(&rec1, 1, Role::End).unwrap();
+    app.marks
+        .store
+        .toggle_role(&rec1, 1, Role::End, 20 * MINUTE)
+        .unwrap();
     app.play_index(0, true, BagUpdate::Reanchor).unwrap();
     assert_eq!(app.player().position(), START_POINT);
 }
@@ -4025,4 +4031,28 @@ fn the_help_says_zero_goes_to_the_start_point_first() {
         "{}",
         popup_text(&backend)
     );
+}
+
+#[test]
+fn a_start_point_past_a_shortened_file_does_not_block_a_new_end_point() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    marks_fixture(
+        &mut app,
+        &temp.path().join("music"),
+        &[2, 5, 15, 18],
+        10 * MINUTE,
+    );
+    set_role(&mut app, 3, 's');
+    // 文件变成 17 分钟：18:00 的起点不显示，也不生效。
+    let mut tracks = app.catalog.tracks().to_vec();
+    tracks[0].duration = Some(17 * MINUTE);
+    app.apply_scan_finished(tracks, Vec::new());
+    assert_eq!(mark_positions(&app), [2 * MINUTE, 5 * MINUTE, 15 * MINUTE]);
+
+    set_role(&mut app, 2, 'S');
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已设为终点 15:00，以后播到这里就算播完")
+    );
+    assert_eq!(control.stop_at(), Some(15 * MINUTE));
 }
