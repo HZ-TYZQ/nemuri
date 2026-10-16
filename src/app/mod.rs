@@ -16,6 +16,7 @@ mod session;
 mod sleep;
 mod sorting;
 mod state;
+mod timeline;
 
 #[cfg(test)]
 mod tests;

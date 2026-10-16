@@ -9,7 +9,6 @@ use crate::app::App;
 use crate::lyrics::Lyrics;
 use crate::theme::Theme;
 
-use super::now_playing::progress_ratio;
 use super::text::truncate_display;
 
 /// 曲库区域至少这么宽才分出歌词面板，保证曲库仍能显示标题、歌手和时长。
@@ -74,7 +73,7 @@ pub(super) fn draw_lyrics(frame: &mut Frame, app: &App, area: Rect, theme: &Them
             .min(overflow)
     } else {
         // 纯文本没有时间：放得下就整段显示，放不下按播放进度匀速往下滚。
-        (overflow as f64 * progress_ratio(app)).round() as usize
+        (overflow as f64 * file_ratio(app)).round() as usize
     };
     let width = usize::from(inner.width);
     let text: Vec<Line> = lines
@@ -92,6 +91,15 @@ pub(super) fn draw_lyrics(frame: &mut Frame, app: &App, area: Rect, theme: &Them
         })
         .collect();
     frame.render_widget(Paragraph::new(text), inner);
+}
+
+/// 纯文本歌词按在整个文件里的进度滚动：歌词对应的是整个文件，不是正在放的那一段。
+fn file_ratio(app: &App) -> f64 {
+    app.effective_duration()
+        .filter(|duration| !duration.is_zero())
+        .map(|duration| app.player().position().as_secs_f64() / duration.as_secs_f64())
+        .unwrap_or_default()
+        .clamp(0.0, 1.0)
 }
 
 /// 面板常驻，没有歌词可显示时留一行提示，停在有歌词时当前行所在的高度。

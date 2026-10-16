@@ -29,7 +29,7 @@ pub enum Action {
     SeekToRatio(f64),
     /// `0`：有起点时先回到起点，已经在起点附近或之前时回到 0:00。
     SeekToStart,
-    /// 跳到绝对位置；带曲目 ID 时只在它仍是当前曲目时生效。
+    /// 跳到绝对位置（显示时间）；带曲目 ID 时只在它仍是当前曲目时生效。
     SeekTo {
         position: Duration,
         track_id: Option<String>,
@@ -138,7 +138,7 @@ impl App {
             Action::SeekToRatio(ratio) => self.seek_to_ratio(ratio),
             Action::SeekToStart => self.seek_to_start(),
             Action::SeekTo { position, track_id } => {
-                self.seek_to_requested(position, track_id.as_deref());
+                self.seek_to_shown(position, track_id.as_deref());
             }
             Action::ChangeVolume(delta) => self.change_volume(delta),
             Action::SetVolume(volume) => {
