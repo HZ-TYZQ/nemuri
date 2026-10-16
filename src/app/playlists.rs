@@ -153,6 +153,17 @@ impl App {
         }
     }
 
+    /// 扫描后把播放列表里改了名的文件跟过去。没能写盘时交回一句说明，接在扫描完成的提示后面。
+    pub(super) fn follow_renamed_playlists(&mut self) -> Option<String> {
+        match self
+            .playlists
+            .follow_renames(self.catalog.tracks(), &self.library_dir)
+        {
+            Saved::Yes => None,
+            Saved::No(error) => Some(format!("{error}；之后改动或退出时再试")),
+        }
+    }
+
     /// 退出时把没存上的播放列表再写一次。
     pub fn save_playlists(&mut self) -> Result<(), String> {
         self.playlists.flush()

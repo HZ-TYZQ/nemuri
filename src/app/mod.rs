@@ -384,6 +384,7 @@ impl App {
         self.replace_tracks(tracks);
         self.follow_renamed_progress();
         self.follow_renamed_marks();
+        let playlist_note = self.follow_renamed_playlists();
         // 重扫往往是因为刚放进了 .lrc 文件，下一个 tick 重新读取歌词。
         self.playback.lyrics = None;
         self.scan_progress = None;
@@ -401,11 +402,11 @@ impl App {
         if let Some(note) = startup_note {
             self.view.message = Some(note);
         }
-        // 放在恢复会话之后，这条说明才不会被恢复提示覆盖。
-        if let Some(folder) = filtered
-            && self.catalog.folder().is_none()
-        {
-            let note = format!("文件夹“{}”已不存在，改为显示全部", folder.label());
+        // 放在恢复会话之后，这两条说明才不会被恢复提示覆盖。
+        let folder_note = filtered
+            .filter(|_| self.catalog.folder().is_none())
+            .map(|folder| format!("文件夹“{}”已不存在，改为显示全部", folder.label()));
+        for note in [folder_note, playlist_note].into_iter().flatten() {
             self.view.message = Some(match self.view.message.take() {
                 Some(message) => format!("{message}；{note}"),
                 None => note,

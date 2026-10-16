@@ -4767,3 +4767,55 @@ fn the_screen_shows_a_clips_name_and_its_own_time() {
         "{popup}"
     );
 }
+
+#[test]
+fn a_rescan_moves_playlist_entries_to_a_renamed_file() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    let mut tracks = Vec::new();
+    for (name, size) in [("a.wav", 10), ("b.wav", 20)] {
+        let path = music.join(name);
+        write_test_wav(&path);
+        tracks.push(Track {
+            file_size: size,
+            ..track(path)
+        });
+    }
+    app.catalog.set_tracks(tracks.clone());
+    let index = app.playlists.create("睡前").unwrap();
+    for item in &tracks {
+        let _ = app
+            .playlists
+            .add_entry(index, item, crate::playlist::Range::WHOLE, None)
+            .unwrap();
+    }
+    let renamed = music.join("renamed.wav");
+    std::fs::rename(&tracks[0].path, &renamed).unwrap();
+    let rescanned = vec![
+        Track {
+            file_size: 10,
+            ..track(renamed.clone())
+        },
+        tracks[1].clone(),
+    ];
+    // 列表文件的位置被一个目录占住：跟上了，但没能写盘，说明接在扫描完成后面。
+    let file = app.paths.playlists_dir.join("e79da1e5898d.json");
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+
+    app.apply_scan_finished(rescanned, Vec::new());
+    let message = app.view.message.clone().unwrap();
+    assert!(
+        message.starts_with("扫描完成，共 2 首歌曲；无法保存播放列表“睡前”")
+            && message.ends_with("；之后改动或退出时再试"),
+        "{message}"
+    );
+    std::fs::remove_dir(&file).unwrap();
+    app.save_playlists().unwrap();
+    let saved = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
+    assert_eq!(saved.all()[0].entries[0].path, renamed);
+
+    settle_search_and_selection(&mut app);
+    play_from_playlist(&mut app, 0);
+    assert_eq!(playing(&app), renamed);
+}

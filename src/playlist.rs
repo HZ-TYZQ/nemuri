@@ -6,8 +6,11 @@
 //! 改动先改内存再写盘。写不了时这个列表记为没存上，之后改动任何列表、以及退出时连同它一起再写；
 //! 内存里的改动不撤回，重试也就不会被挡住。读不了的文件不会被覆盖：内容用不了的改名保留，
 //! 文件本身读不了或者来自更新版本的留在原处，新建同名列表时不覆盖它。
+//!
+//! 条目记着文件大小和修改时间。文件在音乐库里改名后，重扫时靠它们把条目跟到新路径上，
+//! 规则和收听进度、跳转点相同：两边都只有一个对得上时才搬。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -50,7 +53,7 @@ impl Range {
 }
 
 /// 文件大小和修改时间。文件改名后靠它们找回同一个文件。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Stamp {
     pub file_size: u64,
     pub modified_ns: i64,
@@ -365,6 +368,85 @@ impl PlaylistStore {
         let removed = self.playlists.remove(index);
         self.unsaved.remove(&removed.id);
         Ok(())
+    }
+
+    /// 扫描之后：曲库里还在的文件补上或更新大小和修改时间，改了名的文件把条目跟过去。
+    ///
+    /// 只看音乐库目录下、曲库里已经找不到的路径（失联路径）。大小和修改时间相同的失联路径
+    /// 只有一个、曲库里这样的文件也只有一个时，所有列表里指向它的条目都改到新路径上；
+    /// 任何一边有多个都不动，猜错会把别的录音的片段安到这一首上。和收听进度不同，
+    /// 不要求新文件还没有条目：列表里本来就可以有同一个文件。还没有大小和修改时间的条目
+    /// （从 v1 转来、还没扫描到过）不跟随，找不到的条目原样保留。
+    ///
+    /// 有改动的列表写盘，没有改动时什么都不写。
+    pub fn follow_renames(&mut self, tracks: &[Track], library_dir: &Path) -> Saved {
+        let present: HashMap<&Path, &Track> = tracks
+            .iter()
+            .map(|track| (track.path.as_path(), track))
+            .collect();
+        let mut by_stamp: HashMap<Stamp, Vec<&Track>> = HashMap::new();
+        for track in tracks {
+            by_stamp.entry(Stamp::of(track)).or_default().push(track);
+        }
+        // 每个失联路径的大小和修改时间；几条条目记得不一样时说不清是哪个文件，不跟随。
+        let mut lost: HashMap<&Path, Option<Stamp>> = HashMap::new();
+        for entry in self.playlists.iter().flat_map(|playlist| &playlist.entries) {
+            if !entry.path.starts_with(library_dir) || present.contains_key(entry.path.as_path()) {
+                continue;
+            }
+            let stamp = lost.entry(entry.path.as_path()).or_insert(entry.stamp);
+            if *stamp != entry.stamp {
+                *stamp = None;
+            }
+        }
+        let mut lost_by_stamp: HashMap<Stamp, Vec<&Path>> = HashMap::new();
+        for (path, stamp) in lost {
+            if let Some(stamp) = stamp {
+                lost_by_stamp.entry(stamp).or_default().push(path);
+            }
+        }
+        let moves: HashMap<PathBuf, &Track> = lost_by_stamp
+            .into_iter()
+            .filter_map(
+                |(stamp, sources)| match (sources.as_slice(), by_stamp.get(&stamp)) {
+                    // 新路径存不进 JSON 时也不搬，否则这个列表以后都写不了盘。
+                    ([source], Some(targets))
+                        if targets.len() == 1 && targets[0].path.to_str().is_some() =>
+                    {
+                        Some((source.to_path_buf(), targets[0]))
+                    }
+                    _ => None,
+                },
+            )
+            .collect();
+
+        let mut changed = Vec::new();
+        for playlist in &mut self.playlists {
+            let mut touched = false;
+            for entry in &mut playlist.entries {
+                let Some(track) = present
+                    .get(entry.path.as_path())
+                    .copied()
+                    .or_else(|| moves.get(&entry.path).copied())
+                else {
+                    continue;
+                };
+                let stamp = Some(Stamp::of(track));
+                if entry.path != track.path || entry.stamp != stamp {
+                    entry.path = track.path.clone();
+                    entry.stamp = stamp;
+                    touched = true;
+                }
+            }
+            if touched {
+                changed.push(playlist.id);
+            }
+        }
+        if changed.is_empty() {
+            return Saved::Yes;
+        }
+        self.unsaved.extend(changed);
+        self.save_unsaved()
     }
 
     /// 退出时把没存上的列表再写一次。
@@ -823,6 +905,164 @@ mod tests {
         fs::remove_file(&json_files(temp.path())[0]).unwrap();
         store.delete(0).unwrap();
         assert!(store.all().is_empty());
+    }
+
+    /// 大小和修改时间是 `stamp` 的曲目。
+    fn stamped(path: &str, stamp: (u64, i64)) -> Track {
+        Track {
+            file_size: stamp.0,
+            modified_ns: stamp.1,
+            ..track(PathBuf::from(path))
+        }
+    }
+
+    fn paths(playlist: &Playlist) -> Vec<&Path> {
+        playlist
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_path())
+            .collect()
+    }
+
+    #[test]
+    fn entries_follow_a_renamed_file_in_every_playlist() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = PlaylistStore::load(temp.path().to_path_buf()).unwrap();
+        let old = stamped("/music/A/old.m4a", (100, 5));
+        let x = store.create("x").unwrap();
+        let _ = store
+            .add_entry(x, &old, clip(60, Some(120)), Some("掏耳".to_owned()))
+            .unwrap();
+        let _ = store.add_entry(x, &old, Range::WHOLE, None).unwrap();
+        let y = store.create("y").unwrap();
+        let _ = store.add_entry(y, &old, Range::WHOLE, None).unwrap();
+
+        let renamed = stamped("/music/A/new.m4a", (100, 5));
+        let other = stamped("/music/B/other.m4a", (200, 5));
+        assert_eq!(
+            store.follow_renames(&[other, renamed.clone()], Path::new("/music")),
+            Saved::Yes
+        );
+
+        let reloaded = PlaylistStore::load(temp.path().to_path_buf()).unwrap();
+        for store in [&store, &reloaded] {
+            assert_eq!(paths(&store.all()[0]), [&renamed.path, &renamed.path]);
+            assert_eq!(paths(&store.all()[1]), [&renamed.path]);
+            // 范围和名字跟着条目走。
+            let first = &store.all()[0].entries[0];
+            assert_eq!(first.range, clip(60, Some(120)));
+            assert_eq!(first.name.as_deref(), Some("掏耳"));
+        }
+    }
+
+    #[test]
+    fn entries_stay_when_it_cannot_be_told_which_file_was_renamed() {
+        let temp = tempfile::tempdir().unwrap();
+        // 从 v1 转来、还没有大小和修改时间的条目。
+        let v1 = r#"{"version":1,"name":"v1","tracks":["/music/d.m4a"]}"#;
+        let v1_file = temp.path().join("7631.json");
+        fs::write(&v1_file, v1).unwrap();
+        let mut store = PlaylistStore::load(temp.path().to_path_buf()).unwrap();
+        let index = store.create("x").unwrap();
+        for (path, stamp) in [
+            // 两个失联路径对得上同一个新文件。
+            ("/music/a1.m4a", (1, 1)),
+            ("/music/a2.m4a", (1, 1)),
+            // 一个失联路径对得上两个新文件。
+            ("/music/b.m4a", (2, 2)),
+            // 不在音乐库目录下。
+            ("/elsewhere/c.m4a", (3, 3)),
+            // 同一个路径的两条条目记得不一样。
+            ("/music/e.m4a", (4, 4)),
+            ("/music/e.m4a", (5, 5)),
+        ] {
+            let _ = store
+                .add_entry(index, &stamped(path, stamp), Range::WHOLE, None)
+                .unwrap();
+        }
+        let before: Vec<PathBuf> = store.all()[1]
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+
+        let library = [
+            stamped("/music/new-a.m4a", (1, 1)),
+            stamped("/music/b1.m4a", (2, 2)),
+            stamped("/music/b2.m4a", (2, 2)),
+            stamped("/music/new-c.m4a", (3, 3)),
+            stamped("/music/new-d.m4a", (42, 7)),
+            stamped("/music/new-e.m4a", (4, 4)),
+        ];
+        assert_eq!(
+            store.follow_renames(&library, Path::new("/music")),
+            Saved::Yes
+        );
+        let after: Vec<PathBuf> = store.all()[1]
+            .entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect();
+        assert_eq!(after, before);
+        assert_eq!(paths(&store.all()[0]), [Path::new("/music/d.m4a")]);
+        // 没有改动就什么都不写：v1 文件原样留着。
+        assert_eq!(fs::read_to_string(&v1_file).unwrap(), v1);
+    }
+
+    #[test]
+    fn stamps_are_filled_in_and_kept_up_to_date_for_files_still_there() {
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("7631.json");
+        fs::write(
+            &file,
+            r#"{"version":1,"name":"v1","tracks":["/music/a.m4a"]}"#,
+        )
+        .unwrap();
+        let mut store = PlaylistStore::load(temp.path().to_path_buf()).unwrap();
+        let music = Path::new("/music");
+
+        // 第一次扫描到时补上，列表随之写成 v2。
+        assert_eq!(
+            store.follow_renames(&[stamped("/music/a.m4a", (10, 1))], music),
+            Saved::Yes
+        );
+        let json: serde_json::Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(json["version"], 2);
+        assert_eq!(json["entries"][0]["file_size"], 10);
+
+        // 文件改过（比如改了标签）时更新，之后改名照样跟得上。
+        let _ = store.follow_renames(&[stamped("/music/a.m4a", (11, 2))], music);
+        assert_eq!(
+            store.all()[0].entries[0].stamp,
+            Some(Stamp {
+                file_size: 11,
+                modified_ns: 2
+            })
+        );
+        let _ = store.follow_renames(&[stamped("/music/b.m4a", (11, 2))], music);
+        assert_eq!(paths(&store.all()[0]), [Path::new("/music/b.m4a")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entries_do_not_follow_to_a_path_that_cannot_be_saved() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let mut store = PlaylistStore::load(temp.path().to_path_buf()).unwrap();
+        let index = store.create("x").unwrap();
+        let _ = store
+            .add_entry(index, &stamped("/music/a.wav", (6, 6)), Range::WHOLE, None)
+            .unwrap();
+        let renamed = Track {
+            path: PathBuf::from(std::ffi::OsStr::from_bytes(b"/music/a\xFF.wav")),
+            ..stamped("/music/unused.wav", (6, 6))
+        };
+        assert_eq!(
+            store.follow_renames(&[renamed], Path::new("/music")),
+            Saved::Yes
+        );
+        assert_eq!(paths(&store.all()[0]), [Path::new("/music/a.wav")]);
     }
 
     #[cfg(unix)]
