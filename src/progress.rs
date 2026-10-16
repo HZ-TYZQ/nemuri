@@ -19,10 +19,10 @@ const PROGRESS_VERSION: u32 = 1;
 const WHAT: &str = "收听进度";
 /// 达到这个时长的录音才记进度、才续播。
 pub const LONG_RECORDING: Duration = Duration::from_secs(600);
-/// 离结尾这么近时视为已经听完，下次从头开始。
+/// 离结尾（有终点时是终点）这么近时视为已经听完，下次从头开始。
 pub const NEAR_END: Duration = Duration::from_secs(3);
-/// 离开头这么近时视为还没开始听。
-const NEAR_START: Duration = Duration::from_secs(3);
+/// 离开头（有起点时是起点）这么近时视为还没开始听。
+pub const NEAR_START: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Listened {
@@ -107,13 +107,21 @@ impl ProgressStore {
         self.entries.get(path).copied()
     }
 
-    /// 记下 `track` 停在 `position`，总时长 `duration`；记录有变化时返回 true。
+    /// 记下 `track` 停在 `position`；记录有变化时返回 true。`start`、`end` 是录音的起点和终点，
+    /// 没有设时是 0:00 和总时长。
     ///
-    /// 离结尾很近算听完；离开头很近算没开始听，只是打开一首听完的录音不会抹掉“听完”。
-    pub fn record(&mut self, track: &Track, position: Duration, duration: Duration) -> bool {
-        let listened = if position + NEAR_END >= duration {
+    /// 离终点很近或已经过了终点算听完；还没过起点后 [`NEAR_START`] 算没开始听，
+    /// 只是打开一首听完的录音不会抹掉“听完”。百分比不在这里算，仍按整个文件。
+    pub fn record(
+        &mut self,
+        track: &Track,
+        position: Duration,
+        start: Duration,
+        end: Duration,
+    ) -> bool {
+        let listened = if position + NEAR_END >= end {
             Some(Listened::Finished)
-        } else if position < NEAR_START {
+        } else if position < start + NEAR_START {
             self.get(&track.path)
                 .filter(|listened| *listened == Listened::Finished)
         } else {
@@ -181,6 +189,7 @@ mod tests {
         }
     }
 
+    const SECOND: Duration = Duration::from_secs(1);
     const MINUTE: Duration = Duration::from_secs(60);
 
     #[test]
@@ -198,23 +207,63 @@ mod tests {
         let duration = 20 * MINUTE;
         let mut store = ProgressStore::default();
 
-        assert!(store.record(&track, 5 * MINUTE, duration));
+        assert!(store.record(&track, 5 * MINUTE, Duration::ZERO, duration));
         assert_eq!(
             store.get(&track.path),
             Some(Listened::InProgress(5 * MINUTE))
         );
-        assert!(!store.record(&track, 5 * MINUTE, duration));
+        assert!(!store.record(&track, 5 * MINUTE, Duration::ZERO, duration));
 
-        assert!(store.record(&track, duration - Duration::from_secs(2), duration));
+        assert!(store.record(
+            &track,
+            duration - Duration::from_secs(2),
+            Duration::ZERO,
+            duration
+        ));
         assert_eq!(store.get(&track.path), Some(Listened::Finished));
         // 打开一首听完的录音，还停在开头，不算重新开始听。
-        assert!(!store.record(&track, Duration::from_secs(1), duration));
+        assert!(!store.record(&track, Duration::from_secs(1), Duration::ZERO, duration));
         assert_eq!(store.get(&track.path), Some(Listened::Finished));
 
         // 听了一段又拖回开头：当作没开始听。
-        store.record(&track, 2 * MINUTE, duration);
-        assert!(store.record(&track, Duration::ZERO, duration));
+        store.record(&track, 2 * MINUTE, Duration::ZERO, duration);
+        assert!(store.record(&track, Duration::ZERO, Duration::ZERO, duration));
         assert_eq!(store.get(&track.path), None);
+    }
+
+    #[test]
+    fn the_start_and_end_points_move_the_not_started_and_finished_edges() {
+        let track = recording("/m/a.flac", 60);
+        let (start, end) = (90 * SECOND, 50 * MINUTE);
+        let mut store = ProgressStore::default();
+        let record = |store: &mut ProgressStore, position| {
+            store.record(&track, position, start, end);
+            store.get(&track.path)
+        };
+
+        // 起点后 3 秒以内、起点之前都算没开始听。
+        assert_eq!(record(&mut store, start + 2 * SECOND), None);
+        assert_eq!(
+            record(&mut store, start + 3 * SECOND),
+            Some(Listened::InProgress(start + 3 * SECOND))
+        );
+        // 退回起点之前听开头：不记进度，下次从起点开始。
+        assert_eq!(record(&mut store, 30 * SECOND), None);
+
+        assert_eq!(
+            record(&mut store, end - 4 * SECOND),
+            Some(Listened::InProgress(end - 4 * SECOND))
+        );
+        assert_eq!(
+            record(&mut store, end - 3 * SECOND),
+            Some(Listened::Finished)
+        );
+        // 跳过终点去听片尾，也算听完。
+        record(&mut store, 20 * MINUTE);
+        assert_eq!(record(&mut store, 55 * MINUTE), Some(Listened::Finished));
+        // 打开听完的录音，自动跳到起点：不抹掉“听完”。
+        assert_eq!(record(&mut store, start), Some(Listened::Finished));
+        assert_eq!(record(&mut store, start + SECOND), Some(Listened::Finished));
     }
 
     #[test]
@@ -224,7 +273,12 @@ mod tests {
         let mut store = ProgressStore::default();
         let first = recording("/m/音频 - 第一段.flac", 30);
         let second = recording("/m/音频 - 第二段.m4a", 30);
-        store.record(&first, Duration::from_millis(754_250), 30 * MINUTE);
+        store.record(
+            &first,
+            Duration::from_millis(754_250),
+            Duration::ZERO,
+            30 * MINUTE,
+        );
         store.finish(&second);
         store.save(&path).unwrap();
 
@@ -272,7 +326,7 @@ mod tests {
     fn progress_follows_a_file_renamed_inside_the_library() {
         let mut store = ProgressStore::default();
         let old = file("/lib/A/旧名字.flac", 100, 1);
-        store.record(&old, 5 * MINUTE, 30 * MINUTE);
+        store.record(&old, 5 * MINUTE, Duration::ZERO, 30 * MINUTE);
 
         let renamed = file("/lib/A/新名字（备注）.flac", 100, 1);
         let other = file("/lib/A/别的.flac", 200, 1);
@@ -299,7 +353,7 @@ mod tests {
         let mut store_with_target = ProgressStore::default();
         store_with_target.finish(&old);
         let target = file("/lib/甲.flac", 100, 1);
-        store_with_target.record(&target, 5 * MINUTE, 30 * MINUTE);
+        store_with_target.record(&target, 5 * MINUTE, Duration::ZERO, 30 * MINUTE);
         assert!(
             !store_with_target.follow_renames(std::slice::from_ref(&target), Path::new("/lib"))
         );
@@ -351,7 +405,7 @@ mod tests {
         let (mut store, message) = ProgressStore::load(&path);
         assert!(message.unwrap().contains("已改名保留"));
         let track = recording("/m/新.flac", 30);
-        store.record(&track, 5 * MINUTE, 30 * MINUTE);
+        store.record(&track, 5 * MINUTE, Duration::ZERO, 30 * MINUTE);
         store.save(&path).unwrap();
 
         let kept = backups(&path);
@@ -381,7 +435,7 @@ mod tests {
         if fs::read(&path).is_err() {
             let (mut store, message) = ProgressStore::load(&path);
             assert!(message.unwrap().contains("本次运行不保存收听进度"));
-            assert!(store.record(&track, 5 * MINUTE, 30 * MINUTE));
+            assert!(store.record(&track, 5 * MINUTE, Duration::ZERO, 30 * MINUTE));
             store.save(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
             assert_eq!(fs::read_to_string(&path).unwrap(), SAVED);
@@ -395,7 +449,7 @@ mod tests {
             let (mut store, message) = ProgressStore::load(&path);
             fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
             assert!(message.unwrap().contains("也无法改名保留"));
-            store.record(&track, 5 * MINUTE, 30 * MINUTE);
+            store.record(&track, 5 * MINUTE, Duration::ZERO, 30 * MINUTE);
             store.save(&path).unwrap();
             assert_eq!(fs::read(&path).unwrap(), utf16(SAVED));
         }

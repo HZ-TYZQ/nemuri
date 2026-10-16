@@ -6,11 +6,13 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use crate::marks::{self, Mark, Role};
 use crate::player::PlayState;
-use crate::progress::{self, Listened, ProgressStore};
-use crate::track::Track;
+use crate::progress::{self, Listened, NEAR_END, NEAR_START, ProgressStore};
+use crate::track::{Track, fmt_duration};
 
 use super::App;
+use super::marks::label;
 
 /// 记录有变化时，两次写盘至少间隔这么久。
 const SAVE_INTERVAL: Duration = Duration::from_secs(30);
@@ -44,6 +46,46 @@ impl Progress {
     }
 }
 
+/// 装载一首曲目时从哪里开始。
+pub(super) enum Opening {
+    /// 从 0:00 开始。
+    Beginning,
+    /// 听到一半的长录音从记下的位置继续；`has_start` 说明它有没有起点，提示里要说 0 回到哪里。
+    Resume { position: Duration, has_start: bool },
+    /// 本来要从 0:00 开始的长录音设了起点：跳过开头，从起点开始。
+    StartPoint(Mark),
+}
+
+impl Opening {
+    pub(super) fn position(&self) -> Option<Duration> {
+        match self {
+            Self::Beginning => None,
+            Self::Resume { position, .. } => Some(*position),
+            Self::StartPoint(start) => Some(start.position),
+        }
+    }
+
+    /// 从这里开成了之后的提示。
+    pub(super) fn message(&self) -> Option<String> {
+        match self {
+            Self::Beginning => None,
+            Self::Resume {
+                position,
+                has_start,
+            } => Some(format!(
+                "从 {} 继续（按 0 {}）",
+                fmt_duration(*position),
+                if *has_start {
+                    "回到起点"
+                } else {
+                    "从头播放"
+                }
+            )),
+            Self::StartPoint(start) => Some(format!("已跳过开头，从起点 {} 开始", label(start))),
+        }
+    }
+}
+
 impl App {
     /// 当前曲目是长录音时，记下它现在的位置。停止状态没有位置可记；
     /// 这一遍已经记为听完时也不记。
@@ -64,7 +106,10 @@ impl App {
             return;
         };
         let position = self.playback.player.position();
-        if self.progress.store.record(track, position, duration) {
+        let bounds = self.current_bounds();
+        let start = bounds.start.unwrap_or_default();
+        let end = bounds.end.unwrap_or(duration);
+        if self.progress.store.record(track, position, start, end) {
             self.progress.dirty = true;
         }
     }
@@ -102,15 +147,41 @@ impl App {
         self.progress.store.get(&track.path)
     }
 
-    /// 这一首该从哪里开始：听到一半的长录音从记下的位置继续，其余从头。
-    pub(super) fn resume_point(&self, index: usize) -> Option<Duration> {
-        let track = self
+    /// 这一首该从哪里开始：听到一半的长录音从记下的位置继续；其余本来从 0:00 开始，
+    /// 设了起点的长录音改从起点开始。记下的位置还没过起点后 3 秒，或者已经在终点前 3 秒以内
+    /// （设起点、终点之前记下的）时，也和没听过、听完了一样处理。
+    pub(super) fn opening(&self, index: usize) -> Opening {
+        let Some(track) = self
             .catalog
             .get(index)
-            .filter(|track| progress::is_long(track))?;
-        match self.progress.store.get(&track.path)? {
-            Listened::InProgress(position) => Some(position),
-            Listened::Finished => None,
+            .filter(|track| progress::is_long(track))
+        else {
+            return Opening::Beginning;
+        };
+        let marks = self.marks_of(track);
+        let bounds = marks::bounds(marks);
+        let start = marks.iter().find(|mark| mark.role == Role::Start);
+        let from_start = || {
+            start.map_or(Opening::Beginning, |start| {
+                Opening::StartPoint(start.clone())
+            })
+        };
+        match self.progress.store.get(&track.path) {
+            Some(Listened::InProgress(position)) => {
+                let not_started = bounds
+                    .start
+                    .is_some_and(|start| position < start + NEAR_START);
+                let finished = bounds.end.is_some_and(|end| position + NEAR_END >= end);
+                if not_started || finished {
+                    from_start()
+                } else {
+                    Opening::Resume {
+                        position,
+                        has_start: start.is_some(),
+                    }
+                }
+            }
+            Some(Listened::Finished) | None => from_start(),
         }
     }
 

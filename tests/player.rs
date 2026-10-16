@@ -419,6 +419,105 @@ fn seek_to_moves_to_requested_position() {
     );
 }
 
+/// 等这一首播完，返回从 `since` 起过了多久；报解码错误或等了 8 秒还没播完时测试失败。
+fn wait_for_end(player: &mut Player, since: Instant) -> Duration {
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while Instant::now() < deadline {
+        for event in player.drain_events() {
+            match event {
+                PlayerEvent::EndOfStream => return since.elapsed(),
+                PlayerEvent::Error(message) => panic!("不应报解码错误: {message}"),
+                _ => {}
+            }
+        }
+        sleep(Duration::from_millis(10));
+    }
+    panic!("8 秒内没有播完");
+}
+
+#[test]
+fn playback_stops_at_the_stop_position_as_a_normal_end() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("stop.wav");
+    write_test_wav(&wav, 4.0);
+    let mut player = Player::new_for_tests().unwrap();
+    let started = Instant::now();
+    player.play(&wav).unwrap();
+    player.set_stop_at(Some(Duration::from_millis(500)));
+    // 远早于 4 秒的文件结尾就停了，而且不当作解码提前终止。
+    let elapsed = wait_for_end(&mut player, started);
+    assert!(elapsed < Duration::from_millis(2500), "{elapsed:?}");
+    assert_eq!(player.state(), PlayState::Stopped);
+}
+
+#[test]
+fn a_seek_onto_or_past_the_stop_plays_on_to_the_end_of_the_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("past.wav");
+    write_test_wav(&wav, 2.0);
+    let mut player = Player::new_for_tests().unwrap();
+
+    player.play(&wav).unwrap();
+    player.set_stop_at(Some(Duration::from_millis(500)));
+    assert!(player.seek_to(Duration::from_millis(1000)));
+    let seeked = Instant::now();
+    let elapsed = wait_for_end(&mut player, seeked);
+    assert!(elapsed > Duration::from_millis(700), "{elapsed:?}");
+
+    // 正好跳到停止位置上也不停。
+    player.play(&wav).unwrap();
+    player.set_stop_at(Some(Duration::from_millis(500)));
+    assert!(player.seek_to(Duration::from_millis(500)));
+    let seeked = Instant::now();
+    let elapsed = wait_for_end(&mut player, seeked);
+    assert!(elapsed > Duration::from_millis(1100), "{elapsed:?}");
+}
+
+#[test]
+fn seeking_back_before_the_stop_stops_there_again() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("back.wav");
+    write_test_wav(&wav, 4.0);
+    let mut player = Player::new_for_tests().unwrap();
+    player.play(&wav).unwrap();
+    player.set_stop_at(Some(Duration::from_millis(1000)));
+    assert!(player.seek_to(Duration::from_millis(2000)));
+    sleep(Duration::from_millis(100));
+    assert!(player.seek_to(Duration::from_millis(500)));
+    let seeked = Instant::now();
+    // 从 0.5 秒放到 1 秒的停止位置，而不是放到 4 秒的结尾。
+    let elapsed = wait_for_end(&mut player, seeked);
+    assert!(
+        elapsed > Duration::from_millis(350) && elapsed < Duration::from_millis(2500),
+        "{elapsed:?}"
+    );
+}
+
+#[test]
+fn a_cleared_stop_or_a_new_track_plays_to_the_end_of_the_file() {
+    let temp = tempfile::tempdir().unwrap();
+    let wav = temp.path().join("clear.wav");
+    write_test_wav(&wav, 2.0);
+    let mut player = Player::new_for_tests().unwrap();
+    let started = Instant::now();
+    player.play(&wav).unwrap();
+    player.set_stop_at(Some(Duration::from_millis(600)));
+    sleep(Duration::from_millis(200));
+    player.set_stop_at(None);
+    let elapsed = wait_for_end(&mut player, started);
+    assert!(elapsed > Duration::from_millis(1500), "{elapsed:?}");
+
+    // 停止位置属于上一首：装载新曲目时清掉。
+    let other = temp.path().join("other.wav");
+    write_test_wav(&other, 1.5);
+    player.play(&wav).unwrap();
+    player.set_stop_at(Some(Duration::from_millis(300)));
+    let started = Instant::now();
+    player.play(&other).unwrap();
+    let elapsed = wait_for_end(&mut player, started);
+    assert!(elapsed > Duration::from_millis(1100), "{elapsed:?}");
+}
+
 fn write_test_wav_at_rate(path: &Path, duration_secs: f32, sample_rate: u32) {
     let sample_count = (sample_rate as f32 * duration_secs) as usize;
     let mut samples = Vec::with_capacity(sample_count * 2);

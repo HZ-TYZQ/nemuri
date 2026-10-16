@@ -3,6 +3,9 @@
 //! 和收听进度一样是用户数据，按文件记、跟着改名走，但单独存一份文件：
 //! 进度拖回开头时整条记录会删掉，跳转点不能跟着没了。只给长录音设跳转点由调用方把关。
 //! 跳转点按位置排序，精确到毫秒；没有名字时界面显示时间。
+//!
+//! 一个跳转点可以是录音的起点或终点：从头播放时从起点开始，播到终点就算播完。
+//! 每个录音最多一个起点、一个终点，起点在终点之前；删掉那个跳转点，起点或终点也就没了。
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -26,6 +29,42 @@ pub const PREVIOUS_GRACE: Duration = Duration::from_secs(3);
 pub struct Mark {
     pub position: Duration,
     pub name: Option<String>,
+    pub role: Role,
+}
+
+/// 跳转点是不是录音的起点或终点。一个跳转点只能有一种，不会同时是起点和终点。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    #[default]
+    Plain,
+    Start,
+    End,
+}
+
+/// 一个录音的起点和终点；没有设时为 None。
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Bounds {
+    pub start: Option<Duration>,
+    pub end: Option<Duration>,
+}
+
+/// [`MarkStore::toggle_role`] 改了什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RoleChange {
+    /// 这个跳转点现在的角色；取消时是 [`Role::Plain`]。
+    pub role: Role,
+    /// 它原来的角色：起点直接改成终点、终点直接改成起点时，原来那一个就没了。
+    pub was: Role,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleError {
+    /// 没有这个跳转点。
+    Missing,
+    /// 起点要在这个终点之前。
+    StartNotBeforeEnd(Duration),
+    /// 终点要在这个起点之后；没有起点时要在 0:00 之后，这里是 None。
+    EndNotAfterStart(Option<Duration>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +96,14 @@ struct RawMark {
     position_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    start: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    end: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Default)]
@@ -99,6 +146,8 @@ impl MarkStore {
                         .map(|mark| RawMark {
                             position_ms: millis(mark.position),
                             name: mark.name.clone(),
+                            start: mark.role == Role::Start,
+                            end: mark.role == Role::End,
                         })
                         .collect(),
                 })
@@ -142,6 +191,7 @@ impl MarkStore {
             Mark {
                 position,
                 name: None,
+                role: Role::Plain,
             },
         );
         self.entries.set(track, Some(marks));
@@ -172,6 +222,62 @@ impl MarkStore {
         self.entries.set(track, Some(marks))
     }
 
+    /// 把 `track` 的第 `index` 个跳转点设为起点或终点（`role`），它已经是了就取消。
+    /// 设新的时原来的起点或终点变回普通跳转点；起点要在终点之前，终点要在起点和 0:00 之后。
+    ///
+    /// 只有 `duration` 以内的跳转点能设，先后也只和它们比：文件剪短后落在时长之外的起点和终点
+    /// 不显示、不生效，不能挡住新设的。时长之外的起点会落在新终点之后，它的起点标志随之去掉。
+    pub fn toggle_role(
+        &mut self,
+        track: &Track,
+        index: usize,
+        role: Role,
+        duration: Duration,
+    ) -> Result<RoleChange, RoleError> {
+        let mut marks = self.marks(&track.path).to_vec();
+        let visible = within(&marks, duration).len();
+        let Some(mark) = marks.get(index).filter(|_| index < visible) else {
+            return Err(RoleError::Missing);
+        };
+        let (position, was) = (mark.position, mark.role);
+        let new = if was == role { Role::Plain } else { role };
+        // 这个跳转点原来的角色会让出来，不拿它自己比。
+        let other = |wanted: Role| {
+            marks[..visible]
+                .iter()
+                .enumerate()
+                .find(|(other, mark)| *other != index && mark.role == wanted)
+                .map(|(_, mark)| mark.position)
+        };
+        match new {
+            Role::Start => {
+                if let Some(end) = other(Role::End)
+                    && end <= position
+                {
+                    return Err(RoleError::StartNotBeforeEnd(end));
+                }
+            }
+            Role::End => {
+                let start = other(Role::Start);
+                if position <= start.unwrap_or_default() {
+                    return Err(RoleError::EndNotAfterStart(start));
+                }
+            }
+            Role::Plain => {}
+        }
+        for (other, mark) in marks.iter_mut().enumerate() {
+            let same = new != Role::Plain && mark.role == new;
+            let hidden_start_after_end =
+                new == Role::End && mark.role == Role::Start && other >= visible;
+            if same || hidden_start_after_end {
+                mark.role = Role::Plain;
+            }
+        }
+        marks[index].role = new;
+        self.entries.set(track, Some(marks));
+        Ok(RoleChange { role: new, was })
+    }
+
     /// 文件改名后把跳转点跟过去，规则和收听进度相同（见 [`FileRecords::follow_renames`]）。
     /// 有搬动时返回 true。
     pub fn follow_renames(&mut self, tracks: &[Track], library_dir: &Path) -> bool {
@@ -184,16 +290,21 @@ impl MarkStore {
             .into_iter()
             .filter(|recording| !recording.marks.is_empty())
             .map(|recording| {
-                let mut marks: Vec<Mark> = recording
+                let mut marks: Vec<(Mark, bool, bool)> = recording
                     .marks
                     .into_iter()
-                    .map(|mark| Mark {
-                        position: Duration::from_millis(mark.position_ms),
-                        name: mark.name.filter(|name| !name.trim().is_empty()),
+                    .map(|mark| {
+                        let plain = Mark {
+                            position: Duration::from_millis(mark.position_ms),
+                            name: mark.name.filter(|name| !name.trim().is_empty()),
+                            role: Role::Plain,
+                        };
+                        (plain, mark.start, mark.end)
                     })
                     .collect();
-                // 文件可能被手动改过，不能假定已经排好序。
-                marks.sort_by_key(|mark| mark.position);
+                // 文件可能被手动改过，不能假定已经排好序，也不能假定起点和终点合乎规则。
+                marks.sort_by_key(|(mark, ..)| mark.position);
+                let marks = settle_roles(marks);
                 (
                     PathBuf::from(recording.path),
                     Stamped {
@@ -211,6 +322,32 @@ impl MarkStore {
     }
 }
 
+/// 按文件里的 `start`、`end` 定下各跳转点的角色：多个起点只认最早的，多个终点只认最晚的；
+/// 同时标了两个的只算起点；终点不在起点（没有起点时是 0:00）之后就不算。
+/// 去掉的只是标志，跳转点本身都留着。`marks` 已按位置排好序。
+fn settle_roles(marks: Vec<(Mark, bool, bool)>) -> Vec<Mark> {
+    let start = marks.iter().position(|(_, start, _)| *start);
+    let start_at = start.map_or(Duration::ZERO, |start| marks[start].0.position);
+    let end = marks
+        .iter()
+        .rposition(|(_, start, end)| *end && !*start)
+        .filter(|end| marks[*end].0.position > start_at);
+    marks
+        .into_iter()
+        .enumerate()
+        .map(|(index, (mut mark, ..))| {
+            mark.role = if Some(index) == start {
+                Role::Start
+            } else if Some(index) == end {
+                Role::End
+            } else {
+                Role::Plain
+            };
+            mark
+        })
+        .collect()
+}
+
 fn millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
@@ -218,6 +355,21 @@ fn millis(duration: Duration) -> u64 {
 /// 时长以内的跳转点。文件被剪短后，超出时长的跳转点留着，但不显示也不参与跳转。
 pub fn within(marks: &[Mark], duration: Duration) -> &[Mark] {
     &marks[..marks.partition_point(|mark| mark.position < duration)]
+}
+
+/// 这些跳转点里的起点和终点。调用方先用 [`within`] 去掉超出时长的：
+/// 文件被剪短后，落在时长之外的起点和终点和其他跳转点一样不算。
+pub fn bounds(marks: &[Mark]) -> Bounds {
+    let find = |role: Role| {
+        marks
+            .iter()
+            .find(|mark| mark.role == role)
+            .map(|mark| mark.position)
+    };
+    Bounds {
+        start: find(Role::Start),
+        end: find(Role::End),
+    }
 }
 
 /// `position` 所在的那一段：不晚于它（留 [`SAME_SPOT`] 余量）的最后一个跳转点；
@@ -250,6 +402,8 @@ mod tests {
 
     const SECOND: Duration = Duration::from_secs(1);
     const MINUTE: Duration = Duration::from_secs(60);
+    /// `recording` 的时长。
+    const LENGTH: Duration = Duration::from_secs(30 * 60);
 
     fn recording(path: &str) -> Track {
         Track {
@@ -271,7 +425,23 @@ mod tests {
         Mark {
             position: MINUTE * minutes,
             name: None,
+            role: Role::Plain,
         }
+    }
+
+    fn with_role(minutes: u32, role: Role) -> Mark {
+        Mark {
+            role,
+            ..at(minutes)
+        }
+    }
+
+    fn roles(store: &MarkStore, track: &Track) -> Vec<Role> {
+        store
+            .marks(&track.path)
+            .iter()
+            .map(|mark| mark.role)
+            .collect()
     }
 
     fn positions(store: &MarkStore, track: &Track) -> Vec<Duration> {
@@ -387,12 +557,240 @@ mod tests {
             [
                 Mark {
                     position: MINUTE,
-                    name: Some("开头".to_owned())
+                    name: Some("开头".to_owned()),
+                    role: Role::Plain,
                 },
                 at(10)
             ]
         );
         assert!(store.marks(Path::new("/m/b.flac")).is_empty());
+    }
+
+    /// 在 1、5、10、20 分钟各有一个跳转点的录音。
+    fn four_marks() -> (MarkStore, Track) {
+        let track = recording("/m/a.flac");
+        let mut store = MarkStore::default();
+        for minutes in [1, 5, 10, 20] {
+            store.add(&track, MINUTE * minutes).unwrap();
+        }
+        (store, track)
+    }
+
+    #[test]
+    fn a_new_start_or_end_replaces_the_old_one_and_pressing_again_clears_it() {
+        use Role::{End, Plain, Start};
+
+        let (mut store, track) = four_marks();
+        let set = |role, was| Ok(RoleChange { role, was });
+        assert_eq!(
+            store.toggle_role(&track, 1, Start, LENGTH),
+            set(Start, Plain)
+        );
+        assert_eq!(store.toggle_role(&track, 3, End, LENGTH), set(End, Plain));
+        assert_eq!(roles(&store, &track), [Plain, Start, Plain, End]);
+        // 另设一个起点：原来的变回普通跳转点。
+        assert_eq!(
+            store.toggle_role(&track, 0, Start, LENGTH),
+            set(Start, Plain)
+        );
+        assert_eq!(store.toggle_role(&track, 2, End, LENGTH), set(End, Plain));
+        assert_eq!(roles(&store, &track), [Start, Plain, End, Plain]);
+        // 再按一次取消。
+        assert_eq!(
+            store.toggle_role(&track, 0, Start, LENGTH),
+            set(Plain, Start)
+        );
+        assert_eq!(store.toggle_role(&track, 2, End, LENGTH), set(Plain, End));
+        assert_eq!(roles(&store, &track), [Plain; 4]);
+        assert_eq!(
+            store.toggle_role(&track, 4, Start, LENGTH),
+            Err(RoleError::Missing)
+        );
+    }
+
+    #[test]
+    fn the_start_stays_before_the_end() {
+        use Role::{End, Plain, Start};
+
+        let (mut store, track) = four_marks();
+        store.toggle_role(&track, 1, Start, LENGTH).unwrap();
+        store.toggle_role(&track, 2, End, LENGTH).unwrap();
+        assert_eq!(
+            store.toggle_role(&track, 3, Start, LENGTH),
+            Err(RoleError::StartNotBeforeEnd(10 * MINUTE))
+        );
+        assert_eq!(
+            store.toggle_role(&track, 0, End, LENGTH),
+            Err(RoleError::EndNotAfterStart(Some(5 * MINUTE)))
+        );
+        assert_eq!(roles(&store, &track), [Plain, Start, End, Plain]);
+
+        // 起点直接改成终点：原来的起点让出来，不拿它自己比。
+        assert_eq!(
+            store.toggle_role(&track, 1, End, LENGTH),
+            Ok(RoleChange {
+                role: End,
+                was: Start
+            })
+        );
+        assert_eq!(roles(&store, &track), [Plain, End, Plain, Plain]);
+        assert_eq!(
+            store.toggle_role(&track, 1, Start, LENGTH),
+            Ok(RoleChange {
+                role: Start,
+                was: End
+            })
+        );
+        assert_eq!(roles(&store, &track), [Plain, Start, Plain, Plain]);
+
+        // 没有起点时，终点也要在 0:00 之后。
+        let track = recording("/m/b.flac");
+        store.add(&track, Duration::ZERO).unwrap();
+        assert_eq!(
+            store.toggle_role(&track, 0, End, LENGTH),
+            Err(RoleError::EndNotAfterStart(None))
+        );
+        assert_eq!(
+            store.toggle_role(&track, 0, Start, LENGTH).unwrap().role,
+            Start
+        );
+    }
+
+    #[test]
+    fn marks_past_a_shortened_file_neither_take_nor_block_a_start_or_end() {
+        use Role::{End, Plain, Start};
+
+        // 文件剪到 17 分钟：18、20 分钟的跳转点不显示。
+        let shortened = 17 * MINUTE;
+        let (mut store, track) = four_marks();
+        store.add(&track, 18 * MINUTE).unwrap();
+        store.toggle_role(&track, 3, Start, LENGTH).unwrap();
+        assert_eq!(
+            store.toggle_role(&track, 3, End, shortened),
+            Err(RoleError::Missing)
+        );
+
+        // 时长之外的起点不挡新终点；它在新终点之后，起点标志去掉，跳转点留着。
+        assert_eq!(
+            store.toggle_role(&track, 2, End, shortened),
+            Ok(RoleChange {
+                role: End,
+                was: Plain
+            })
+        );
+        assert_eq!(roles(&store, &track), [Plain, Plain, End, Plain, Plain]);
+
+        // 时长之外的终点也不挡新起点；它在新起点之后，照样留着。
+        store.toggle_role(&track, 4, End, LENGTH).unwrap();
+        assert_eq!(
+            store.toggle_role(&track, 2, Start, shortened),
+            Ok(RoleChange {
+                role: Start,
+                was: Plain
+            })
+        );
+        assert_eq!(roles(&store, &track), [Plain, Plain, Start, Plain, End]);
+    }
+
+    #[test]
+    fn the_start_and_end_go_with_their_marks() {
+        use Role::{End, Start};
+
+        let (mut store, track) = four_marks();
+        store.toggle_role(&track, 1, Start, LENGTH).unwrap();
+        store.toggle_role(&track, 3, End, LENGTH).unwrap();
+        store.rename(&track, 1, "正片");
+        assert_eq!(store.marks(&track.path)[1].role, Start);
+        assert_eq!(
+            bounds(store.marks(&track.path)),
+            Bounds {
+                start: Some(5 * MINUTE),
+                end: Some(20 * MINUTE)
+            }
+        );
+        // 文件被剪短，终点落到时长之外：不算。
+        assert_eq!(
+            bounds(within(store.marks(&track.path), 15 * MINUTE)),
+            Bounds {
+                start: Some(5 * MINUTE),
+                end: None
+            }
+        );
+
+        assert_eq!(store.remove(&track, 3), Some(with_role(20, End)));
+        assert_eq!(bounds(store.marks(&track.path)).end, None);
+
+        let mut renamed = track.clone();
+        renamed.path = PathBuf::from("/m/新名字.flac");
+        assert!(store.follow_renames(std::slice::from_ref(&renamed), Path::new("/m")));
+        assert_eq!(bounds(store.marks(&renamed.path)).start, Some(5 * MINUTE));
+    }
+
+    #[test]
+    fn the_start_and_end_round_trip_and_plain_marks_get_no_flags() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("marks.json");
+        let (mut store, track) = four_marks();
+        store.toggle_role(&track, 0, Role::Start, LENGTH).unwrap();
+        store.toggle_role(&track, 3, Role::End, LENGTH).unwrap();
+        store.save(&path).unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert_eq!(contents.matches("\"start\": true").count(), 1, "{contents}");
+        assert_eq!(contents.matches("\"end\": true").count(), 1, "{contents}");
+        assert!(!contents.contains("false"), "{contents}");
+        let (loaded, message) = MarkStore::load(&path);
+        assert_eq!(message, None);
+        assert_eq!(loaded.entries, store.entries);
+    }
+
+    #[test]
+    fn hand_edited_starts_and_ends_are_settled_on_load() {
+        use Role::{End, Plain, Start};
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("marks.json");
+        let recording = |path: &str, marks: &str| {
+            format!(r#"{{"path":"{path}","file_size":7,"modified_ns":9,"marks":[{marks}]}}"#)
+        };
+        let recordings = [
+            // 多个起点只认最早的，多个终点只认最晚的；文件里没排序也一样。
+            recording(
+                "/m/a.flac",
+                r#"{"position_ms":600000,"start":true},{"position_ms":60000,"start":true},
+                   {"position_ms":1200000,"end":true},{"position_ms":900000,"end":true}"#,
+            ),
+            // 同时标了两个的只算起点。
+            recording(
+                "/m/b.flac",
+                r#"{"position_ms":60000,"start":true,"end":true},{"position_ms":600000}"#,
+            ),
+            // 终点不在起点之后：去掉终点，跳转点留着。
+            recording(
+                "/m/c.flac",
+                r#"{"position_ms":60000,"end":true},{"position_ms":600000,"start":true}"#,
+            ),
+            // 没有起点时，0:00 上的终点也不算。
+            recording("/m/d.flac", r#"{"position_ms":0,"end":true}"#),
+        ];
+        fs::write(
+            &path,
+            format!(r#"{{"version":1,"recordings":[{}]}}"#, recordings.join(",")),
+        )
+        .unwrap();
+        let (store, message) = MarkStore::load(&path);
+        assert_eq!(message, None);
+        let roles = |path: &str| -> Vec<Role> {
+            store
+                .marks(Path::new(path))
+                .iter()
+                .map(|mark| mark.role)
+                .collect()
+        };
+        assert_eq!(roles("/m/a.flac"), [Start, Plain, Plain, End]);
+        assert_eq!(roles("/m/b.flac"), [Start, Plain]);
+        assert_eq!(roles("/m/c.flac"), [Plain, Start]);
+        assert_eq!(roles("/m/d.flac"), [Plain]);
     }
 
     #[test]

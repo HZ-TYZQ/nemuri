@@ -4,6 +4,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use crate::marks;
 use crate::player::PlayState;
 use crate::progress::NEAR_END;
 use crate::session::Session;
@@ -38,11 +39,15 @@ impl App {
         let Some(index) = self.index_for_path(&track) else {
             return;
         };
+        // 上次停在结尾 3 秒以内（有终点时是终点前 3 秒以内或终点之后）：这一首算听完了，
+        // 退回开头；有起点时退回起点。
+        let item = &self.catalog.tracks()[index];
+        let bounds = marks::bounds(self.marks_of(item));
         let mut position = session.position;
-        if let Some(duration) = self.catalog.tracks()[index].duration
-            && position + NEAR_END >= duration
+        if let Some(end) = bounds.end.or(item.duration)
+            && position + NEAR_END >= end
         {
-            position = Duration::ZERO;
+            position = bounds.start.unwrap_or_default();
         }
         // 位置恢复失败（例如文件被改短）时退回曲首，仍然选中这首歌。
         let opened = self
@@ -57,6 +62,7 @@ impl App {
 
         self.playback.spectrum.on_track_change();
         self.playback.playing_index = Some(index);
+        self.apply_stop();
         self.view.pending_selected_path = Some(track);
         self.restore_pending_selection();
         if self.config.shuffle {

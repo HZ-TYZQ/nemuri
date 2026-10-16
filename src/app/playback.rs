@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::config::AppConfig;
 use crate::player::{ChannelMix, MAX_BALANCE, PlayState};
-use crate::track::{PlaybackMode, RepeatMode, fmt_duration};
+use crate::track::{PlaybackMode, RepeatMode};
 
 use super::{App, BagUpdate};
 
@@ -97,9 +97,9 @@ impl App {
         // 先记下正在放的这一条停在哪里，再换；换的若是同一条，就接着放。
         self.note_progress();
         let autoplay = self.playback.player.state() != PlayState::Paused;
-        let start = self.resume_point(index);
-        match self.load_track(&path, autoplay, start) {
-            Ok(resumed) => {
+        let opening = self.opening(index);
+        match self.load_track(&path, autoplay, opening.position()) {
+            Ok(opened_at) => {
                 self.start_playthrough();
                 // 只有切歌成功后才改动历史与频谱状态；加载失败时旧曲仍是当前曲目。
                 if let Some(previous) = previous {
@@ -108,8 +108,9 @@ impl App {
                 // 保留已收敛的 sensitivity，重新进入 fast-adapt（见 spectrum.rs）。
                 self.playback.spectrum.on_track_change();
                 self.playback.playing_index = Some(index);
-                self.view.message = resumed
-                    .map(|position| format!("从 {} 继续（按 0 从头播放）", fmt_duration(position)));
+                self.apply_stop();
+                // 从记下的位置或起点开不成时退回了 0:00，那就不用说明。
+                self.view.message = opened_at.and_then(|_| opening.message());
                 if let Some(visible) = self
                     .visible_indices()
                     .iter()
@@ -131,7 +132,7 @@ impl App {
     }
 
     /// 装载曲目：`start` 有值时从那里开始，播放中切歌时接着播放、暂停中只装载。
-    /// 从中间装载失败（例如文件被剪短）时退回从头装载。返回实际续播的位置。
+    /// 从中间装载失败（例如文件被剪短）时退回从头装载。返回实际开始的位置，从头时为 None。
     fn load_track(
         &mut self,
         path: &Path,

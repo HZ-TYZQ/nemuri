@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, App, Overlay};
+use crate::marks::Role;
 
 use super::ViewLayout;
 
@@ -137,9 +138,9 @@ pub(super) const LIBRARY: &[Binding] = &[
     ),
     listed(
         "0–9",
-        "跳到 0% – 90% 位置",
+        "跳到 0% – 90% 位置（有起点时 0 先回到起点）",
         &[
-            (ch('0'), Action::SeekToRatio(0.0)),
+            (ch('0'), Action::SeekToStart),
             (ch('1'), Action::SeekToRatio(0.1)),
             (ch('2'), Action::SeekToRatio(0.2)),
             (ch('3'), Action::SeekToRatio(0.3)),
@@ -355,6 +356,14 @@ pub(super) const MARKS: &[Binding] = &[
         "Enter",
         "跳到这里",
         &[(code(KeyCode::Enter), Action::Activate)],
+    ),
+    listed(
+        "s/S",
+        "起点/终点",
+        &[
+            (ch('s'), Action::ToggleMarkRole(Role::Start)),
+            (ch('S'), Action::ToggleMarkRole(Role::End)),
+        ],
     ),
     listed("e", "改名", &[(ch('e'), Action::RenameMark)]),
     listed("d", "删除", &[(ch('d'), Action::RemoveMark)]),

@@ -49,6 +49,10 @@ pub trait PlaybackBackend {
     fn duration(&self) -> Option<Duration>;
     /// 停止状态或输出中断时返回 false。
     fn seek_to(&mut self, position: Duration) -> bool;
+    /// 停止位置，用文件时间：正常播放到这里就当作这一首播完，和自然播完一样报告
+    /// [`PlayerEvent::EndOfStream`]。只在一路播到它时生效：跳转落在它上面或越过它，
+    /// 就一直放到文件结尾；再跳回它之前，又会在这里停。装载新曲目和停止时清掉。
+    fn set_stop_at(&mut self, position: Option<Duration>);
     fn volume(&self) -> u8;
     fn set_volume(&mut self, percent: u8);
     fn is_muted(&self) -> bool;
