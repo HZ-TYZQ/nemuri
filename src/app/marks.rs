@@ -81,7 +81,11 @@ impl App {
     }
 
     /// 当前曲目的起点和终点（时长以内的）；用不了跳转点时都没有。
+    /// 播放列表里的条目不用录音的起点和终点，也都没有。
     pub(super) fn current_bounds(&self) -> Bounds {
+        if !self.plays_from_library() {
+            return Bounds::default();
+        }
         marks::bounds(self.current_marks())
     }
 
@@ -172,11 +176,13 @@ impl App {
 
     /// `0`：有起点时先回到起点；已经在起点后 3 秒以内或起点之前时回到 0:00，
     /// 所以连按两次总是回到 0:00。没有起点时和以前一样回到 0:00，不提示。
+    /// 播放列表里的条目不用录音的起点，回到条目开头。
     pub(super) fn seek_to_start(&mut self) {
         let start = self
             .current_marks()
             .iter()
             .find(|mark| mark.role == Role::Start)
+            .filter(|_| self.plays_from_library())
             .cloned();
         let Some(start) = start else {
             self.seek_to_ratio(0.0);

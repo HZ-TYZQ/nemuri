@@ -11,6 +11,7 @@ mod playback;
 mod playlists;
 mod progress;
 mod queue;
+mod scope;
 mod selection;
 mod session;
 mod sleep;

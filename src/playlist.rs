@@ -263,6 +263,10 @@ impl PlaylistStore {
         &self.warnings
     }
 
+    pub fn get(&self, id: PlaylistId) -> Option<&Playlist> {
+        self.playlists.iter().find(|playlist| playlist.id == id)
+    }
+
     pub fn create(&mut self, name: &str) -> Result<usize, String> {
         let name = name.trim();
         if name.is_empty() {
@@ -334,6 +338,17 @@ impl PlaylistStore {
         playlist.entries.remove(position);
         let changed = playlist.id;
         Ok(self.changed(changed))
+    }
+
+    /// 改这个列表的循环方式。
+    pub fn set_repeat(&mut self, id: PlaylistId, repeat: RepeatMode) -> Result<Saved, String> {
+        let playlist = self
+            .playlists
+            .iter_mut()
+            .find(|playlist| playlist.id == id)
+            .ok_or_else(|| "播放列表不存在".to_owned())?;
+        playlist.repeat = repeat;
+        Ok(self.changed(id))
     }
 
     pub fn delete(&mut self, index: usize) -> Result<(), String> {

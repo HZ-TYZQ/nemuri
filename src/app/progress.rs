@@ -88,9 +88,11 @@ impl Opening {
 
 impl App {
     /// 当前曲目是长录音时，记下它现在的位置。停止状态没有位置可记；
-    /// 这一遍已经记为听完时也不记。
+    /// 这一遍已经记为听完时也不记；播放列表里的条目不碰收听进度。
     pub(super) fn note_progress(&mut self) {
-        if self.progress.finished_playthrough || self.playback.player.state() == PlayState::Stopped
+        if self.progress.finished_playthrough
+            || self.playback.player.state() == PlayState::Stopped
+            || !self.plays_from_library()
         {
             return;
         }
@@ -114,12 +116,15 @@ impl App {
         }
     }
 
-    /// 当前曲目听完了：自然播完，或者往后跳过了结尾。
+    /// 当前曲目听完了：自然播完，或者往后跳过了结尾。播放列表里的条目不记。
     ///
     /// 往后跳过结尾时播放器还停在跳转前的位置，接着切歌或停止又会先记一次当前位置；
     /// 所以这一遍从此不再记录，直到换上下一遍播放。
     pub(super) fn mark_finished(&mut self) {
         self.progress.finished_playthrough = true;
+        if !self.plays_from_library() {
+            return;
+        }
         let Some(track) = self
             .playback
             .playing_index

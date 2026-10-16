@@ -14,6 +14,9 @@ use super::text::{
     ascii_progress_bar, fmt_duration, mark_ticks, now_playing_text, truncate_display,
 };
 
+/// 状态栏里的播放列表名最多占这么宽，免得把音量和队列挤出去。
+const SCOPE_NAME_WIDTH: usize = 12;
+
 /// 边框标题。当前所在段有名字时接在后面：放在标题里不和右边的状态栏抢宽度，
 /// 名字太长时截断。
 fn now_playing_title(app: &App, width: u16) -> String {
@@ -78,8 +81,19 @@ pub(super) fn draw_now_playing(
     if app.config().swap_channels {
         channels.push_str(" · 左右互换");
     }
+    // 列表范围里写明在放哪个列表的第几条，后面的循环方式就是这个列表的。
+    let scope = match app.scope_summary() {
+        Some((name, number, count)) => {
+            let name = truncate_display(name, SCOPE_NAME_WIDTH);
+            match number {
+                Some(number) => format!("{name} {number}/{count} · "),
+                None => format!("{name} · "),
+            }
+        }
+        None => String::new(),
+    };
     let status = format!(
-        "{sleep}{privacy}{} · {volume}{channels} · 队列 {}",
+        "{sleep}{privacy}{scope}{} · {volume}{channels} · 队列 {}",
         app.playback_mode().label(),
         app.playback().queue.len()
     );

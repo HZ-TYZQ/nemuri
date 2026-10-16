@@ -87,6 +87,15 @@ fn mouse(app: &mut App, input: &mut MouseInput, event: MouseEvent, view: &ViewLa
     }
 }
 
+/// 历史里各项的文件路径，从旧到新。
+fn history_paths(app: &App) -> Vec<PathBuf> {
+    app.playback
+        .history
+        .iter()
+        .map(|played| played.path.clone())
+        .collect()
+}
+
 fn settle_search_and_selection(app: &mut App) {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
@@ -159,7 +168,7 @@ fn sequential_next_skips_a_broken_track_without_polluting_history() {
         .canonicalize()
         .unwrap();
     assert_eq!(current_path, third.canonicalize().unwrap());
-    assert_eq!(app.playback.history, vec![first]);
+    assert_eq!(history_paths(&app), vec![first]);
 }
 
 #[test]
@@ -1777,7 +1786,7 @@ fn a_natural_end_moves_on_and_repeat_one_replays_the_track() {
     app.drain_player_events();
     assert_eq!(app.playback.playing_index, Some(1));
     assert_eq!(app.player().current_path(), Some(paths[1].as_path()));
-    assert_eq!(app.playback.history, vec![paths[0].clone()]);
+    assert_eq!(history_paths(&app), vec![paths[0].clone()]);
 }
 
 #[test]
@@ -4103,4 +4112,364 @@ fn a_playlist_change_that_cannot_be_saved_is_kept_and_saved_on_exit() {
     app.save_playlists().unwrap();
     let reloaded = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
     assert_eq!(reloaded.all()[0].entries[0].path, song);
+}
+
+/// 曲库里放 `names` 这几首能播的短曲，建一个列表“睡前”，按顺序装着其中前 `listed` 首。
+/// 返回各首的路径。
+fn playlist_fixture(temp: &Path, app: &mut App, names: &[&str], listed: usize) -> Vec<PathBuf> {
+    let music = temp.join("music");
+    let tracks: Vec<Track> = names
+        .iter()
+        .map(|name| {
+            let path = music.join(name);
+            write_test_wav(&path);
+            track(path)
+        })
+        .collect();
+    app.catalog.set_tracks(tracks.clone());
+    settle_search_and_selection(app);
+    let index = app.playlists.create("睡前").unwrap();
+    for item in &tracks[..listed] {
+        let saved = app
+            .playlists
+            .add_entry(index, item, crate::playlist::Range::WHOLE, None)
+            .unwrap();
+        assert_eq!(saved, crate::playlist::Saved::Yes);
+    }
+    tracks.into_iter().map(|item| item.path).collect()
+}
+
+/// 打开播放列表面板，进入“睡前”，在第 `position` 条上按 Enter。
+fn play_from_playlist(app: &mut App, position: usize) {
+    press(app, key(KeyCode::Char('P')));
+    press(app, key(KeyCode::Enter));
+    app.dispatch(Action::SelectRow(position));
+    press(app, key(KeyCode::Enter));
+}
+
+/// 在“睡前”的条目面板里删掉第 `position` 条，再关掉面板。
+fn remove_from_playlist(app: &mut App, position: usize) {
+    press(app, key(KeyCode::Char('P')));
+    press(app, key(KeyCode::Enter));
+    app.dispatch(Action::SelectRow(position));
+    press(app, key(KeyCode::Char('d')));
+    press(app, key(KeyCode::Esc));
+    press(app, key(KeyCode::Esc));
+}
+
+/// 在曲库里选中第 `row` 首按 Enter。
+fn play_library_row(app: &mut App, row: usize) {
+    app.dispatch(Action::SelectRow(row));
+    press(app, key(KeyCode::Enter));
+}
+
+fn playing(app: &App) -> PathBuf {
+    app.player().current_path().unwrap().to_path_buf()
+}
+
+fn finish(app: &mut App, control: &FakeControl) {
+    control.finish_track();
+    app.drain_player_events();
+}
+
+/// 列表范围：列表名、第几条和条目数；曲库范围时为 None。
+fn scope(app: &App) -> Option<(String, Option<usize>, usize)> {
+    app.scope_summary()
+        .map(|(name, number, count)| (name.to_owned(), number, count))
+}
+
+fn in_list(number: Option<usize>, count: usize) -> Option<(String, Option<usize>, usize)> {
+    Some(("睡前".to_owned(), number, count))
+}
+
+#[test]
+fn a_playlist_plays_from_the_chosen_entry_to_its_end_and_stops() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 3);
+
+    play_from_playlist(&mut app, 1);
+    assert_eq!(playing(&app), paths[1]);
+    assert_eq!(app.view.overlay, Overlay::None);
+    // 不再把后面的条目倒进队列。
+    assert!(app.playback.queue.is_empty());
+    assert_eq!(scope(&app), in_list(Some(2), 3));
+    // 列表默认按顺序放完，不管曲库的“播完停止”。
+    assert_eq!(app.config.repeat, RepeatMode::Stop);
+    assert_eq!(app.media_snapshot().repeat, RepeatMode::None);
+    assert!(app.media_snapshot().can_go_next);
+
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[2]);
+    assert_eq!(scope(&app), in_list(Some(3), 3));
+    assert!(!app.media_snapshot().can_go_next);
+    finish(&mut app, &control);
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(app.view.message.as_deref(), Some("播放列表“睡前”已播完"));
+
+    // 停下后仍在列表范围里，空格从最后一条重放。
+    assert_eq!(scope(&app), in_list(Some(3), 3));
+    press(&mut app, key(KeyCode::Char(' ')));
+    assert_eq!(playing(&app), paths[2]);
+    assert_eq!(app.player().state(), PlayState::Playing);
+}
+
+#[test]
+fn z_changes_only_the_playlists_own_repeat_mode_and_saves_it() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 3);
+    play_from_playlist(&mut app, 2);
+
+    press(&mut app, key(KeyCode::Char('z')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("列表“睡前”循环：列表循环")
+    );
+    assert_eq!(app.config.repeat, RepeatMode::Stop);
+    assert_eq!(app.media_snapshot().repeat, RepeatMode::All);
+    assert!(app.media_snapshot().can_go_next);
+    let saved = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
+    assert_eq!(saved.all()[0].repeat, RepeatMode::All);
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[0]);
+
+    press(&mut app, key(KeyCode::Char('z')));
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[0]);
+
+    press(&mut app, key(KeyCode::Char('z')));
+    finish(&mut app, &control);
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已播完，播放停止（按 z 切换循环方式）")
+    );
+
+    // 系统媒体控制关掉循环时，列表改为“顺序”，而不是曲库的“播完停止”。
+    app.dispatch(Action::SetRepeat(RepeatMode::One));
+    app.dispatch(Action::SetRepeat(RepeatMode::None));
+    assert_eq!(app.playlists.all()[0].repeat, RepeatMode::None);
+    assert_eq!(app.config.repeat, RepeatMode::Stop);
+
+    // 回到曲库范围，`z` 又切曲库的。
+    play_library_row(&mut app, 1);
+    assert_eq!(scope(&app), None);
+    press(&mut app, key(KeyCode::Char('z')));
+    assert_eq!(app.view.message.as_deref(), Some("循环：顺序"));
+    assert_eq!(app.config.repeat, RepeatMode::None);
+    assert_eq!(app.playlists.all()[0].repeat, RepeatMode::None);
+}
+
+#[test]
+fn shuffle_in_a_playlist_plays_every_entry_once_and_leaves_the_library_bag_alone() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        shuffle: true,
+        ..AppConfig::default()
+    });
+    let names = ["a.wav", "b.wav", "c.wav", "d.wav", "e.wav"];
+    let paths = playlist_fixture(temp.path(), &mut app, &names, 4);
+    play_library_row(&mut app, 4);
+    let library_bag = app.playback.order.bag().to_vec();
+
+    play_from_playlist(&mut app, 1);
+    let mut played = vec![playing(&app)];
+    for _ in 0..3 {
+        finish(&mut app, &control);
+        played.push(playing(&app));
+    }
+    finish(&mut app, &control);
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(played[0], paths[1]);
+    played.sort();
+    assert_eq!(played, paths[..4]);
+    assert_eq!(app.playback.order.bag(), library_bag);
+}
+
+#[test]
+fn queued_tracks_play_in_between_and_the_library_takes_back_the_scope() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 2);
+    play_from_playlist(&mut app, 0);
+    app.playback.queue.push_back(paths[2].clone());
+
+    // 插播的整首放完，回到列表接当前条目的下一条。
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[2]);
+    assert_eq!(app.playback.origin, super::scope::Origin::Library);
+    assert_eq!(scope(&app), in_list(Some(1), 2));
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[1]);
+    assert_eq!(scope(&app), in_list(Some(2), 2));
+
+    // 在曲库里点播一首，就回到曲库范围。
+    play_library_row(&mut app, 2);
+    assert_eq!(playing(&app), paths[2]);
+    assert_eq!(scope(&app), None);
+}
+
+#[test]
+fn previous_returns_to_the_scope_each_item_was_played_in() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 2);
+    play_library_row(&mut app, 2);
+    play_from_playlist(&mut app, 0);
+    play_library_row(&mut app, 2);
+    assert_eq!(scope(&app), None);
+
+    // 退回列表里的那一条，也回到列表的范围。
+    press(&mut app, key(KeyCode::Char('p')));
+    assert_eq!(playing(&app), paths[0]);
+    assert_eq!(scope(&app), in_list(Some(1), 2));
+    // 再退回进入列表之前在曲库里放的那首，回到曲库范围。
+    press(&mut app, key(KeyCode::Char('p')));
+    assert_eq!(playing(&app), paths[2]);
+    assert_eq!(scope(&app), None);
+
+    // 那一条从列表里删掉之后再退回去，只当插播放一次，不改变范围。
+    play_from_playlist(&mut app, 1);
+    play_library_row(&mut app, 2);
+    remove_from_playlist(&mut app, 1);
+    press(&mut app, key(KeyCode::Char('p')));
+    assert_eq!(playing(&app), paths[1]);
+    assert!(matches!(
+        app.playback.origin,
+        super::scope::Origin::Entry { .. }
+    ));
+    assert_eq!(scope(&app), None);
+}
+
+#[test]
+fn a_removed_playing_entry_is_followed_by_the_one_after_it() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 3);
+    play_from_playlist(&mut app, 1);
+
+    remove_from_playlist(&mut app, 1);
+    // 正在放的这一条照样放完。
+    assert_eq!(playing(&app), paths[1]);
+    assert_eq!(scope(&app), in_list(None, 2));
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[2]);
+    assert_eq!(scope(&app), in_list(Some(2), 2));
+
+    // 单曲循环也接后面的那一条，不重放删掉的那一条；后面没有了就转回开头。
+    app.dispatch(Action::SetRepeat(RepeatMode::One));
+    remove_from_playlist(&mut app, 1);
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[0]);
+    assert_eq!(scope(&app), in_list(Some(1), 1));
+}
+
+#[test]
+fn deleting_the_playing_playlist_returns_playback_to_the_library() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        repeat: RepeatMode::None,
+        ..AppConfig::default()
+    });
+    let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 2);
+    play_from_playlist(&mut app, 0);
+
+    press(&mut app, key(KeyCode::Char('P')));
+    press(&mut app, key(KeyCode::Char('x')));
+    press(&mut app, key(KeyCode::Char('y')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("播放列表已删除，音乐文件未受影响；播放回到曲库")
+    );
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(scope(&app), None);
+    assert_eq!(playing(&app), paths[0]);
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[1]);
+}
+
+#[test]
+fn playlist_entries_ignore_the_start_point_end_point_and_listening_progress() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), AT_12_34);
+    app.tick_timers(app.now);
+    let recording = app.catalog.tracks()[0].clone();
+    assert_eq!(
+        app.listened(&recording),
+        Some(Listened::InProgress(AT_12_34))
+    );
+    let index = app.playlists.create("睡前").unwrap();
+    let _ = app
+        .playlists
+        .add_entry(index, &recording, crate::playlist::Range::WHOLE, None)
+        .unwrap();
+
+    play_from_playlist(&mut app, 0);
+    // 不续播，也不跳过开头；终点不交给播放器。
+    assert_eq!(playing(&app), recording.path);
+    assert_eq!(app.player().position(), Duration::ZERO);
+    assert_eq!(control.stop_at(), None);
+    // `0` 回到条目开头，不经过起点。
+    assert!(app.playback.player.seek_to(10 * MINUTE));
+    press(&mut app, key(KeyCode::Char('0')));
+    assert_eq!(app.player().position(), Duration::ZERO);
+
+    // 不记位置，也不记听完。
+    assert!(app.playback.player.seek_to(5 * MINUTE));
+    app.tick_timers(app.now);
+    assert_eq!(
+        app.listened(&recording),
+        Some(Listened::InProgress(AT_12_34))
+    );
+    finish(&mut app, &control);
+    app.tick_timers(app.now);
+    assert_eq!(
+        app.listened(&recording),
+        Some(Listened::InProgress(AT_12_34))
+    );
+    let saved = crate::progress::ProgressStore::load(&app.paths.progress_file).0;
+    assert_eq!(
+        saved.get(&recording.path),
+        Some(Listened::InProgress(AT_12_34))
+    );
+}
+
+#[test]
+fn a_session_in_a_playlist_comes_back_to_the_same_entry_and_scope() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 3);
+    let tracks: Vec<Track> = app
+        .catalog
+        .tracks()
+        .iter()
+        .map(|item| long_track(&item.path))
+        .collect();
+    app.catalog.set_tracks(tracks.clone());
+    settle_search_and_selection(&mut app);
+    play_from_playlist(&mut app, 1);
+    assert!(app.playback.player.seek_to(Duration::from_secs(40)));
+    app.save_session().unwrap();
+    let saved = std::fs::read_to_string(&app.paths.session_file).unwrap();
+    assert!(
+        saved.contains("position_ms = 40000\nplaylist = \"睡前\"\nentry = 2\n"),
+        "{saved}"
+    );
+    drop(app);
+
+    let mut app = app_in(temp.path(), "music", AppConfig::default());
+    app.apply_scan_finished(tracks.clone(), Vec::new());
+    assert_eq!(playing(&app), tracks[1].path);
+    assert_eq!(app.player().state(), PlayState::Paused);
+    assert_eq!(app.player().position(), Duration::from_secs(40));
+    assert_eq!(scope(&app), in_list(Some(2), 3));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已恢复上次播放：睡前 2/3 b 0:40，按空格继续")
+    );
+    app.save_session().unwrap();
+    drop(app);
+
+    // 列表删掉了：当作曲库播放恢复。
+    for file in std::fs::read_dir(temp.path().join("data/nemuri/playlists")).unwrap() {
+        std::fs::remove_file(file.unwrap().path()).unwrap();
+    }
+    let mut app = app_in(temp.path(), "music", AppConfig::default());
+    app.apply_scan_finished(tracks.clone(), Vec::new());
+    assert_eq!(playing(&app), tracks[1].path);
+    assert_eq!(scope(&app), None);
+    assert_eq!(app.playback.origin, super::scope::Origin::Library);
 }

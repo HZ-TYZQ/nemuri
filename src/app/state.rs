@@ -13,16 +13,23 @@ use crate::spectrum::SpectrumProcessor;
 
 use super::Overlay;
 use super::order::PlaybackOrder;
+use super::scope::{Origin, Played, Scope};
 use super::sleep::SleepTimer;
 
-/// 播放后端、当前曲目、队列与历史、播放顺序，以及跟着当前曲目走的歌词和频谱。
+/// 播放后端、当前曲目、队列与历史、播放范围和顺序，以及跟着当前曲目走的歌词和频谱。
 pub struct Playback {
     pub(crate) player: Box<dyn PlaybackBackend>,
     /// 当前曲目在曲库中的下标；曲目不在曲库中或没有在播放时为 None。
+    /// 播放列表里的条目也有：曲库里的 ▶、跳转点和歌词都按它找文件。
     pub(crate) playing_index: Option<usize>,
+    /// 当前这一项从哪里来：曲库，还是播放列表里的哪一条。
+    pub(crate) origin: Origin,
     pub(crate) queue: VecDeque<PathBuf>,
-    /// 播放过的曲目，“上一首”从这里往回取。
-    pub(crate) history: Vec<PathBuf>,
+    /// 播放过的项目，“上一首”从这里往回取。
+    pub(crate) history: Vec<Played>,
+    /// 当前的播放范围：曲库，或者一个播放列表。
+    pub(crate) scope: Scope,
+    /// 曲库范围的播放顺序；列表范围有自己的。
     pub(super) order: PlaybackOrder,
     pub(super) spectrum: SpectrumProcessor,
     /// 歌词所属的曲目路径与结果（None 表示这首没有歌词）。
@@ -40,8 +47,10 @@ impl Playback {
         Self {
             player,
             playing_index: None,
+            origin: Origin::Library,
             queue: VecDeque::new(),
             history: Vec::new(),
+            scope: Scope::Library,
             order: PlaybackOrder::new(seed),
             spectrum: SpectrumProcessor::new(),
             lyrics: None,

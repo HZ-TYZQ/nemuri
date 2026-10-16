@@ -1,13 +1,15 @@
 //! 命名播放列表：新建、删除、编辑和从中播放。
 //!
+//! 在一条上按 Enter 进入这个列表的播放范围（见 `scope.rs`）。
 //! 列表改动后立刻写盘；写不了时改动照样留着，提示原因，之后改动任何列表或退出时再写。
 
 use crate::playlist::{Range, Saved};
 
-use super::{App, BagUpdate, Overlay};
+use super::scope::Cursor;
+use super::{App, Overlay};
 
 /// 改动后的提示；没能写盘时接上原因。
-fn saved_message(done: String, saved: Saved) -> String {
+pub(super) fn saved_message(done: String, saved: Saved) -> String {
     match saved {
         Saved::Yes => done,
         Saved::No(error) => format!("{done}，但{error}；之后改动或退出时再试"),
@@ -35,11 +37,25 @@ impl App {
         }
     }
 
+    /// 删掉正在播放的列表时回到曲库范围，正在放的这一项照样放完。
     pub(super) fn delete_selected_playlist(&mut self) {
+        let id = self
+            .playlists
+            .all()
+            .get(self.view.playlist_selected)
+            .map(|playlist| playlist.id);
         match self.playlists.delete(self.view.playlist_selected) {
             Ok(()) => {
                 self.view.playlist_selected = self.view.playlist_selected.saturating_sub(1);
-                self.view.message = Some("播放列表已删除，音乐文件未受影响".to_owned());
+                let back = id.is_some_and(|id| self.after_playlist_deleted(id));
+                self.view.message = Some(
+                    if back {
+                        "播放列表已删除，音乐文件未受影响；播放回到曲库"
+                    } else {
+                        "播放列表已删除，音乐文件未受影响"
+                    }
+                    .to_owned(),
+                );
             }
             Err(error) => self.view.message = Some(error),
         }
@@ -57,7 +73,7 @@ impl App {
             self.view.message = Some("播放列表不存在".to_owned());
             return;
         };
-        let name = playlist.name.clone();
+        let (id, name) = (playlist.id, playlist.name.clone());
         let already = playlist
             .entries
             .iter()
@@ -73,11 +89,14 @@ impl App {
                     ),
                 };
                 self.view.message = Some(saved_message(done, saved));
+                self.after_playlist_edit(id, None);
             }
             Err(error) => self.view.message = Some(error),
         }
     }
 
+    /// 条目面板里的 Enter：进入这个列表的播放范围，从选中的这一条开始。队列不受影响。
+    /// 这一条放不成时沿列表往后试，和自动切歌一样。
     pub(super) fn play_playlist_from_selected(&mut self) {
         if self.output_blocks_playback() {
             return;
@@ -85,21 +104,15 @@ impl App {
         let Some(playlist) = self.playlists.all().get(self.view.playlist_selected) else {
             return;
         };
-        let start = self
-            .view
-            .playlist_track_selected
-            .min(playlist.entries.len());
-        let paths: Vec<_> = playlist.entries[start..]
-            .iter()
-            .map(|entry| entry.path.clone())
-            .collect();
-        let mut paths = paths.into_iter();
-        let Some(first) = paths.next() else {
+        let Some(entry) = playlist.entries.get(self.view.playlist_track_selected) else {
             self.view.message = Some("播放列表是空的".to_owned());
             return;
         };
-        self.playback.queue = paths.collect();
-        match self.play_path(&first, true, BagUpdate::Reanchor) {
+        let (playlist, entry) = (playlist.id, entry.id);
+        // 先放再进范围：历史里记下的是放它之前的范围。
+        let played = self.play_entry(playlist, entry, true);
+        self.enter_playlist(playlist, Cursor::At(entry));
+        match played {
             Ok(()) => self.view.overlay = Overlay::None,
             Err(skip) => {
                 self.advance(false, vec![skip]);
@@ -110,12 +123,25 @@ impl App {
         }
     }
 
+    /// 删掉正在放的那一条时，它照样放完，然后接原来排在它后面的那一条。
     pub(super) fn remove_playlist_track(&mut self) {
+        let removed = self
+            .playlists
+            .all()
+            .get(self.view.playlist_selected)
+            .and_then(|playlist| {
+                let entry = playlist.entries.get(self.view.playlist_track_selected)?;
+                Some((playlist.id, entry.id))
+            });
         match self.playlists.remove_entry(
             self.view.playlist_selected,
             self.view.playlist_track_selected,
         ) {
             Ok(saved) => {
+                if let Some((playlist, entry)) = removed {
+                    let position = self.view.playlist_track_selected;
+                    self.after_playlist_edit(playlist, Some((entry, position)));
+                }
                 self.view.playlist_track_selected =
                     self.view.playlist_track_selected.saturating_sub(1);
                 self.view.message = Some(saved_message(

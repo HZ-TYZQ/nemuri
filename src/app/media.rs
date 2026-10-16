@@ -124,7 +124,7 @@ impl App {
             position: self.shown_position(),
             volume: self.playback.player.volume(),
             muted: self.playback.player.is_muted(),
-            repeat: self.config.repeat,
+            repeat: self.playback_mode().repeat,
             shuffle: self.config.shuffle,
             can_go_previous: !self.playback.history.is_empty(),
             can_go_next: self.can_go_next(),
@@ -140,14 +140,7 @@ impl App {
     }
 
     fn can_go_next(&self) -> bool {
-        if !self.playback.queue.is_empty() {
-            return true;
-        }
-        self.playback.order.has_next(
-            self.catalog.scope(),
-            self.playback.playing_index,
-            self.playback_mode(),
-        )
+        !self.playback.queue.is_empty() || self.scope_has_next()
     }
 }
 
