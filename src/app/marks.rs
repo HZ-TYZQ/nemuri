@@ -5,8 +5,11 @@
 //!
 //! 起点和终点是标了角色的跳转点。起点在装载时用（见 `progress.rs` 的 `opening`）；
 //! 终点交给播放器作停止位置，播到那里就和自然播完一样接下一首。
+//!
+//! 放播放列表里的片段时，只用片段以内的跳转点，时间按片段内的时间显示；
+//! 录音的起点和终点在列表里不起作用，也不能在这时设。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::marks::{self, AddError, Bounds, Mark, MarkStore, Role, RoleError};
@@ -14,11 +17,13 @@ use crate::player::PlayState;
 use crate::progress;
 use crate::track::{Track, fmt_duration};
 
+use super::scope::Origin;
 use super::{App, Overlay};
 
 const NOT_PLAYING: &str = "先开始播放，才能使用跳转点";
 const NOT_LONG: &str = "只有 10 分钟以上的录音能设跳转点";
 const NO_MARKS: &str = "这首还没有跳转点，按 b 在当前位置添加";
+const NO_ROLES_IN_PLAYLIST: &str = "播放列表里不用录音的起点和终点，从曲库播放时再设";
 
 /// 跳转点和写盘状态。
 pub(super) struct Marks {
@@ -44,16 +49,26 @@ pub(super) fn label(mark: &Mark) -> String {
     }
 }
 
-/// 跳到一个跳转点时的提示；起点和终点点明身份，例如“跳到起点 1:30 正片”。
-fn jumped_to(mark: &Mark) -> String {
-    match mark.role {
-        Role::Plain => format!("跳到 {}", label(mark)),
-        Role::Start => format!("跳到起点 {}", label(mark)),
-        Role::End => format!("跳到终点 {}", label(mark)),
-    }
-}
-
 impl App {
+    /// 提示里怎么称呼当前这一项的跳转点：显示时间，有名字时后接名字。
+    fn shown_label(&self, mark: &Mark) -> String {
+        let at = fmt_duration(self.shown(mark.position));
+        match &mark.name {
+            Some(name) => format!("{at} {name}"),
+            None => at,
+        }
+    }
+
+    /// 跳到一个跳转点时的提示；起点和终点点明身份，例如“跳到起点 1:30 正片”。
+    fn jumped_to(&self, mark: &Mark) -> String {
+        let at = self.shown_label(mark);
+        match mark.role {
+            Role::Plain => format!("跳到 {at}"),
+            Role::Start => format!("跳到起点 {at}"),
+            Role::End => format!("跳到终点 {at}"),
+        }
+    }
+
     /// 能用跳转点的当前曲目在曲库里的下标：正在播放或暂停中的长录音。不能用时给出原因。
     fn mark_target(&self) -> Result<usize, &'static str> {
         if self.playback.player.state() == PlayState::Stopped {
@@ -68,16 +83,31 @@ impl App {
         }
     }
 
-    /// 当前曲目时长以内的跳转点；用不了跳转点时为空。
-    /// 面板、进度条和段名都按它显示，面板的行号也就是跳转点在列表里的位置。
+    /// 当前这一项以内的跳转点：曲库播放是时长以内的，片段是片段开头（含）到结尾（不含）之间的。
+    /// 用不了跳转点时为空。面板、进度条和段名都按它显示；面板的第几行加上
+    /// [`marks_offset`](Self::marks_offset) 才是跳转点在录音里的位置。
     pub fn current_marks(&self) -> &[Mark] {
-        let (Ok(index), Some(duration)) = (self.mark_target(), self.effective_duration()) else {
+        let span = self.span();
+        let (Ok(index), Some(end)) = (self.mark_target(), span.end) else {
             return &[];
         };
-        marks::within(
+        let marks = marks::within(
             self.marks.store.marks(&self.catalog.tracks()[index].path),
-            duration,
-        )
+            end,
+        );
+        &marks[marks.partition_point(|mark| mark.position < span.start)..]
+    }
+
+    /// 片段开头之前还有几个跳转点：面板里不列出来，按行号改动跳转点时要加上。
+    fn marks_offset(&self) -> usize {
+        let Ok(index) = self.mark_target() else {
+            return 0;
+        };
+        let start = self.span().start;
+        self.marks
+            .store
+            .marks(&self.catalog.tracks()[index].path)
+            .partition_point(|mark| mark.position < start)
     }
 
     /// 当前曲目的起点和终点（时长以内的）；用不了跳转点时都没有。
@@ -102,8 +132,14 @@ impl App {
     /// 把当前曲目的终点交给播放器，播到那里就当作播完；没有终点时清掉。
     /// 装载之后和终点可能变了之后调用。跳转之后不用管：播放器只在一路播到终点时停，
     /// 跳到终点或终点之后就一直放到文件结尾，跳回终点之前又会在终点停。
+    ///
+    /// 播放列表的条目交的是条目自己的结尾。片段的结尾是硬的：App 不让跳转落在它上面或之后，
+    /// 所以播放器总是一路播到它。
     pub(super) fn apply_stop(&mut self) {
-        let end = self.current_bounds().end;
+        let end = match &self.playback.origin {
+            Origin::Library => self.current_bounds().end,
+            Origin::Entry { range, .. } => range.end,
+        };
         self.playback.player.set_stop_at(end);
     }
 
@@ -134,10 +170,12 @@ impl App {
         match self.marks.store.add(track, position) {
             Ok(added) => {
                 let at = self.marks.store.marks(&track.path)[added].position;
-                self.save_marks_now(format!("已添加跳转点 {}（B 管理）", fmt_duration(at)));
+                let at = fmt_duration(self.shown(at));
+                self.save_marks_now(format!("已添加跳转点 {at}（B 管理）"));
             }
             Err(AddError::TooClose(at)) => {
-                self.view.message = Some(format!("这里已有跳转点 {}", fmt_duration(at)));
+                let at = fmt_duration(self.shown(at));
+                self.view.message = Some(format!("这里已有跳转点 {at}"));
             }
             Err(AddError::UnsupportedPath) => {
                 self.view.message = Some("文件路径含有无法保存的字符，不能设跳转点".to_owned());
@@ -152,8 +190,9 @@ impl App {
     pub(super) fn jump_to_previous_mark(&mut self) {
         let jump = self.marks_in_reach().map(|marks| {
             match marks::previous_target(marks, self.playback.player.position()) {
-                Some(index) => (marks[index].position, jumped_to(&marks[index])),
-                None => (Duration::ZERO, "跳到开头".to_owned()),
+                Some(index) => (marks[index].position, self.jumped_to(&marks[index])),
+                // 片段回到片段的开头。
+                None => (self.span().start, "跳到开头".to_owned()),
             }
         });
         match jump {
@@ -165,7 +204,7 @@ impl App {
     pub(super) fn jump_to_next_mark(&mut self) {
         let jump = self.marks_in_reach().and_then(|marks| {
             marks::next_target(marks, self.playback.player.position())
-                .map(|index| (marks[index].position, jumped_to(&marks[index])))
+                .map(|index| (marks[index].position, self.jumped_to(&marks[index])))
                 .ok_or("后面没有跳转点")
         });
         match jump {
@@ -214,7 +253,7 @@ impl App {
         match opened {
             Ok(selected) => {
                 self.view.marks_selected = selected;
-                self.view.marks_path = self.current_track().map(|track| track.path.clone());
+                self.view.marks_for = self.marks_owner();
                 self.view.overlay = Overlay::Marks;
             }
             Err(reason) => self.view.message = Some(reason.to_owned()),
@@ -226,7 +265,7 @@ impl App {
         let Some(mark) = self.current_marks().get(self.view.marks_selected) else {
             return;
         };
-        let (position, message) = (mark.position, jumped_to(mark));
+        let (position, message) = (mark.position, self.jumped_to(mark));
         self.view.overlay = Overlay::None;
         self.jump_to(position, message);
     }
@@ -235,8 +274,9 @@ impl App {
         let Ok(index) = self.mark_target() else {
             return;
         };
+        let selected = self.view.marks_selected + self.marks_offset();
         let track = &self.catalog.tracks()[index];
-        let Some(removed) = self.marks.store.remove(track, self.view.marks_selected) else {
+        let Some(removed) = self.marks.store.remove(track, selected) else {
             return;
         };
         let last = self.current_marks().is_empty();
@@ -245,21 +285,27 @@ impl App {
         } else {
             self.view.marks_selected = self.view.marks_selected.min(self.current_marks().len() - 1);
         }
+        let at = self.shown_label(&removed);
         let message = match removed.role {
-            Role::Start => format!("已删除起点 {}，以后从 0:00 开始", label(&removed)),
-            Role::End => format!("已删除终点 {}，以后播到文件结尾", label(&removed)),
-            Role::Plain if last => format!("已删除最后一个跳转点 {}", label(&removed)),
-            Role::Plain => format!("已删除跳转点 {}", label(&removed)),
+            Role::Start => format!("已删除起点 {at}，以后从 0:00 开始"),
+            Role::End => format!("已删除终点 {at}，以后播到文件结尾"),
+            Role::Plain if last => format!("已删除最后一个跳转点 {at}"),
+            Role::Plain => format!("已删除跳转点 {at}"),
         };
         self.save_marks_now(message);
         self.apply_stop();
     }
 
     /// 面板里的 `s` / `S`：把选中的跳转点设为起点或终点，已经是了就取消。
+    /// 放播放列表的条目时不能设：列表里不用录音的起点和终点，面板显示的又是条目内的时间。
     pub(super) fn toggle_selected_mark_role(&mut self, role: Role) {
         let Ok(index) = self.mark_target() else {
             return;
         };
+        if !self.plays_from_library() {
+            self.view.message = Some(NO_ROLES_IN_PLAYLIST.to_owned());
+            return;
+        }
         let Some(mark) = self.current_marks().get(self.view.marks_selected).cloned() else {
             return;
         };
@@ -328,11 +374,12 @@ impl App {
         let Ok(index) = self.mark_target() else {
             return;
         };
+        let selected = self.view.marks_selected + self.marks_offset();
         let track = &self.catalog.tracks()[index];
         if self
             .marks
             .store
-            .rename(track, self.view.marks_selected, &self.view.name_input)
+            .rename(track, selected, &self.view.name_input)
         {
             self.save_marks_now(String::new());
         }
@@ -350,13 +397,19 @@ impl App {
             self.view.overlay = Overlay::None;
             return;
         }
-        let current = self.current_track().map(|track| track.path.clone());
-        if current != self.view.marks_path {
-            self.view.marks_path = current;
+        let current = self.marks_owner();
+        if current != self.view.marks_for {
+            self.view.marks_for = current;
             self.view.marks_selected = self.current_section().unwrap_or(0);
             self.view.overlay = Overlay::Marks;
         }
         self.view.marks_selected = self.view.marks_selected.min(count - 1);
+    }
+
+    /// 跳转点面板是为哪一项打开的：文件和来源。同一个文件的另一个片段也算换了一项。
+    fn marks_owner(&self) -> Option<(PathBuf, Origin)> {
+        let track = self.current_track()?;
+        Some((track.path.clone(), self.playback.origin.clone()))
     }
 
     /// 扫描后把改了名的文件的跳转点跟过去。正在放的曲目的跳转点或时长可能随之变了，

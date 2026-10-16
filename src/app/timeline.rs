@@ -7,6 +7,7 @@
 use std::time::Duration;
 
 use super::App;
+use super::scope::Origin;
 
 /// 当前播放项在文件里占的一段，用文件时间。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,12 +26,47 @@ impl App {
             .or_else(|| self.current_track().and_then(|track| track.duration))
     }
 
-    /// 当前播放项在文件里占的一段：曲库播放是整个文件。
+    /// 当前播放项在文件里占的一段：曲库播放是整个文件，播放列表的条目是它自己的范围。
+    /// 片段的结尾超出文件时长（文件被剪短了）时，放到文件结尾为止。
     pub(super) fn span(&self) -> Span {
-        Span {
-            start: Duration::ZERO,
-            end: self.effective_duration(),
+        let duration = self.effective_duration();
+        match &self.playback.origin {
+            Origin::Entry { range, .. } if self.current_track().is_some() => Span {
+                start: range.start,
+                end: match (range.end, duration) {
+                    (Some(end), Some(duration)) => Some(end.min(duration)),
+                    (end, duration) => end.or(duration),
+                },
+            },
+            Origin::Entry { .. } | Origin::Library => Span {
+                start: Duration::ZERO,
+                end: duration,
+            },
         }
+    }
+
+    /// 显示时间里的这个位置是不是已经越过了当前这一项的结尾。曲库播放跳到正好结尾时让它自己播完；
+    /// 播放列表的条目在结尾上就算越过：片段的结尾是硬的，而播放器的停止位置只在一路播到时才生效，
+    /// 跳到它上面会一直放到文件结尾。
+    pub(super) fn beyond_end(&self, shown: Duration) -> bool {
+        let Some(duration) = self.shown_duration() else {
+            return false;
+        };
+        match self.playback.origin {
+            Origin::Library => shown > duration,
+            Origin::Entry { .. } => shown >= duration,
+        }
+    }
+
+    /// 当前这一项在界面和系统媒体控制里的名字：文件名；播放列表的条目有名字时接在后面。
+    pub fn item_title(&self) -> Option<String> {
+        let title = self.current_track()?.display_title();
+        Some(match &self.playback.origin {
+            Origin::Entry {
+                name: Some(name), ..
+            } => format!("{title} · {name}"),
+            Origin::Entry { .. } | Origin::Library => title.to_owned(),
+        })
     }
 
     /// 文件时间换成显示时间；开头之前的算作 0:00。

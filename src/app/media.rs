@@ -28,10 +28,8 @@ impl App {
             }
             return;
         }
-        if let Some(duration) = self.shown_duration()
-            && requested > duration_as_micros(duration)
-        {
-            // 往后跳过了结尾，当作这一条已经听完。
+        if self.beyond_end(Duration::from_micros(requested as u64)) {
+            // 往后跳过了结尾，当作这一条已经听完；播放列表的条目直接放下一条。
             self.mark_finished();
             self.play_next(false);
             return;
@@ -43,12 +41,20 @@ impl App {
     }
 
     /// 按进度条比例跳转，比例按显示的总时长算。没有时长就无从换算，直接忽略。
+    /// 播放列表的条目点到最右端就是下一条。
     pub(super) fn seek_to_ratio(&mut self, ratio: f64) {
         let Some(duration) = self.shown_duration() else {
             return;
         };
-        let ratio = ratio.clamp(0.0, 1.0);
-        self.seek_to_requested(self.file_time(duration.mul_f64(ratio)), None);
+        let target = duration.mul_f64(ratio.clamp(0.0, 1.0));
+        if self.beyond_end(target) {
+            if !self.output_blocks_playback() && self.playback.player.state() != PlayState::Stopped
+            {
+                self.play_next(false);
+            }
+            return;
+        }
+        self.seek_to_requested(self.file_time(target), None);
     }
 
     /// 系统媒体控制的 SetPosition：位置是显示时间。
@@ -69,9 +75,7 @@ impl App {
         {
             return false;
         }
-        if let Some(end) = self.span().end
-            && position > end
-        {
+        if self.beyond_end(self.shown(position)) {
             return false;
         }
         let moved = self.playback.player.seek_to(position);
@@ -113,7 +117,7 @@ impl App {
         MediaSnapshot {
             status: self.playback.player.state(),
             title: match (track, shown) {
-                (_, Some(track)) => track.display_title().to_owned(),
+                (_, Some(_)) => self.item_title().unwrap_or_default(),
                 (Some(_), None) => PRIVATE_TITLE.to_owned(),
                 (None, None) => String::new(),
             },
@@ -132,9 +136,10 @@ impl App {
         }
     }
 
+    /// 每装载一次换一个 ID：同一个文件的两个片段先后播放时，系统那边才知道换了曲目、刷新长度。
     fn current_track_id(&self) -> String {
         match self.playback.playing_index {
-            Some(index) => format!("/org/mpris/MediaPlayer2/Track/{index}"),
+            Some(_) => format!("/org/mpris/MediaPlayer2/Track/{}", self.playback.loads),
             None => "/org/mpris/MediaPlayer2/TrackList/NoTrack".to_owned(),
         }
     }

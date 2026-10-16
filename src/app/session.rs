@@ -48,29 +48,47 @@ impl App {
             .and_then(|saved| self.saved_entry(saved, &track))
             .unwrap_or(Origin::Library);
         // 上次停在结尾 3 秒以内（有终点时是终点前 3 秒以内或终点之后）：这一首算听完了，
-        // 退回开头；有起点时退回起点。列表里的条目不用录音的起点和终点。
+        // 退回开头；有起点时退回起点。列表里的条目不用录音的起点和终点，按条目自己的范围：
+        // 位置不在范围里（条目改过）或者离条目结尾 3 秒以内时，从条目开头开始。
         let item = &self.catalog.tracks()[index];
-        let bounds = match origin {
-            Origin::Library => marks::bounds(self.marks_of(item)),
-            Origin::Entry { .. } => marks::Bounds::default(),
+        let (start, end, outside) = match &origin {
+            Origin::Library => {
+                let bounds = marks::bounds(self.marks_of(item));
+                let start = bounds.start.unwrap_or_default();
+                (start, bounds.end.or(item.duration), false)
+            }
+            Origin::Entry { range, .. } => {
+                let end = match (range.end, item.duration) {
+                    (Some(end), Some(duration)) => Some(end.min(duration)),
+                    (end, duration) => end.or(duration),
+                };
+                (range.start, end, session.position < range.start)
+            }
         };
         let mut position = session.position;
-        if let Some(end) = bounds.end.or(item.duration)
-            && position + NEAR_END >= end
-        {
-            position = bounds.start.unwrap_or_default();
+        if outside || end.is_some_and(|end| position + NEAR_END >= end) {
+            position = start;
         }
-        // 位置恢复失败（例如文件被改短）时退回曲首，仍然选中这首歌。
+        // 位置恢复失败（例如文件被改短）时退回曲首，仍然选中这首歌；
+        // 列表的条目退回条目开头，开头之前不是这一条的内容。
+        let fallback = match &origin {
+            Origin::Library => Duration::ZERO,
+            Origin::Entry { range, .. } => range.start,
+        };
         let opened = self
             .playback
             .player
             .open_at(&track, position)
             .map(|()| position)
-            .or_else(|_| self.playback.player.open(&track).map(|()| Duration::ZERO));
+            .or_else(|_| match fallback {
+                Duration::ZERO => self.playback.player.open(&track).map(|()| Duration::ZERO),
+                start => self.playback.player.open_at(&track, start).map(|()| start),
+            });
         let Ok(position) = opened else {
             return;
         };
 
+        self.playback.loads += 1;
         self.playback.spectrum.on_track_change();
         self.playback.playing_index = Some(index);
         self.playback.origin = origin.clone();
@@ -93,12 +111,13 @@ impl App {
         };
         self.view.message = Some(format!(
             "已恢复上次播放：{scope}{} {}，按空格继续",
-            self.catalog.tracks()[index].display_title(),
+            self.item_title().unwrap_or_default(),
             crate::track::fmt_duration(self.shown(position))
         ));
     }
 
     /// 会话里记的那一条：列表还在、第几条还在、路径也对得上时才算数。
+    /// 片段的开头已经在文件之外（文件被剪短了）时也不算，当作曲库播放来恢复。
     fn saved_entry(&self, saved: &ListEntry, track: &Path) -> Option<Origin> {
         let playlist = self
             .playlists
@@ -106,7 +125,11 @@ impl App {
             .iter()
             .find(|playlist| playlist.name == saved.playlist)?;
         let entry = playlist.entries.get(saved.number.checked_sub(1)?)?;
-        (entry.path == track).then(|| Origin::Entry {
+        let duration = self
+            .index_for_path(track)
+            .and_then(|index| self.catalog.tracks()[index].duration);
+        let playable = duration.is_none_or(|duration| entry.range.start < duration);
+        (entry.path == track && playable).then(|| Origin::Entry {
             playlist: playlist.id,
             entry: entry.id,
             range: entry.range,

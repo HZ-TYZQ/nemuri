@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::config::AppConfig;
 use crate::player::{ChannelMix, MAX_BALANCE, PlayState};
 use crate::playlist::Saved;
-use crate::track::RepeatMode;
+use crate::track::{RepeatMode, fmt_duration};
 
 use super::playlists::saved_message;
 use super::progress::Opening;
@@ -110,6 +110,23 @@ impl App {
             return Err(Skip::new(format!("#{}", index + 1), "不在曲库中"));
         };
         let path = track.path.clone();
+        let title = match &origin {
+            Origin::Entry {
+                name: Some(name), ..
+            } => format!("{} · {name}", track.display_title()),
+            Origin::Entry { .. } | Origin::Library => track.display_title().to_owned(),
+        };
+        // 文件被剪短了，片段的开头已经在文件之外：不放，也不退回 0:00。
+        if let Origin::Entry { range, .. } = &origin
+            && track
+                .duration
+                .is_some_and(|duration| range.start >= duration)
+        {
+            return Err(Skip::new(
+                title,
+                format!("片段开头 {} 超出文件时长", fmt_duration(range.start)),
+            ));
+        }
         let previous = remember_current
             .then(|| self.current_played())
             .flatten()
@@ -117,13 +134,15 @@ impl App {
         // 先记下正在放的这一条停在哪里，再换；换的若是同一条，就接着放。
         self.note_progress();
         let autoplay = self.playback.player.state() != PlayState::Paused;
-        // 列表里的条目不续播，也不用录音的起点。
-        let opening = match origin {
-            Origin::Library => self.opening(index),
-            Origin::Entry { .. } => Opening::Beginning,
+        // 列表里的条目不续播，也不用录音的起点，从条目自己的开头开始；
+        // 从开头装载不成时不退回 0:00，开头之前不是这一条的内容。
+        let (opening, exact) = match &origin {
+            Origin::Library => (self.opening(index), false),
+            Origin::Entry { range, .. } => (Opening::Clip(range.start), true),
         };
-        match self.load_track(&path, autoplay, opening.position()) {
+        match self.load_track(&path, autoplay, opening.position(), exact) {
             Ok(opened_at) => {
+                self.playback.loads += 1;
                 self.start_playthrough();
                 // 只有切歌成功后才改动历史与频谱状态；加载失败时旧曲仍是当前曲目。
                 if let Some(previous) = previous {
@@ -149,10 +168,7 @@ impl App {
                 }
                 Ok(())
             }
-            Err(error) => Err(Skip::new(
-                self.catalog.tracks()[index].display_title().to_owned(),
-                short_reason(&error, &path),
-            )),
+            Err(error) => Err(Skip::new(title, short_reason(&error, &path))),
         }
     }
 
@@ -166,21 +182,27 @@ impl App {
     }
 
     /// 装载曲目：`start` 有值时从那里开始，播放中切歌时接着播放、暂停中只装载。
-    /// 从中间装载失败（例如文件被剪短）时退回从头装载。返回实际开始的位置，从头时为 None。
+    /// 从中间装载失败（例如文件被剪短）时退回从头装载；`exact` 时不退回，直接报错。
+    /// 返回实际开始的位置，从头时为 None。
     fn load_track(
         &mut self,
         path: &Path,
         autoplay: bool,
         start: Option<Duration>,
+        exact: bool,
     ) -> Result<Option<Duration>, String> {
         let player = &mut self.playback.player;
-        if let Some(position) = start
-            && player.open_at(path, position).is_ok()
-        {
-            if autoplay {
-                player.resume();
+        if let Some(position) = start {
+            match player.open_at(path, position) {
+                Ok(()) => {
+                    if autoplay {
+                        player.resume();
+                    }
+                    return Ok(Some(position));
+                }
+                Err(error) if exact => return Err(error),
+                Err(_) => {}
             }
-            return Ok(Some(position));
         }
         if autoplay {
             player.play(path)

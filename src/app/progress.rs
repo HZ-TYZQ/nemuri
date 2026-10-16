@@ -54,6 +54,8 @@ pub(super) enum Opening {
     Resume { position: Duration, has_start: bool },
     /// 本来要从 0:00 开始的长录音设了起点：跳过开头，从起点开始。
     StartPoint(Mark),
+    /// 播放列表的条目从它自己的开头开始，不提示。
+    Clip(Duration),
 }
 
 impl Opening {
@@ -62,13 +64,14 @@ impl Opening {
             Self::Beginning => None,
             Self::Resume { position, .. } => Some(*position),
             Self::StartPoint(start) => Some(start.position),
+            Self::Clip(start) => (!start.is_zero()).then_some(*start),
         }
     }
 
     /// 从这里开成了之后的提示。
     pub(super) fn message(&self) -> Option<String> {
         match self {
-            Self::Beginning => None,
+            Self::Beginning | Self::Clip(_) => None,
             Self::Resume {
                 position,
                 has_start,

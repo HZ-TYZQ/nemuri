@@ -24,6 +24,8 @@ pub struct Playback {
     pub(crate) playing_index: Option<usize>,
     /// 当前这一项从哪里来：曲库，还是播放列表里的哪一条。
     pub(crate) origin: Origin,
+    /// 装载过几次，用作系统媒体控制的曲目 ID。
+    pub(super) loads: u64,
     pub(crate) queue: VecDeque<PathBuf>,
     /// 播放过的项目，“上一首”从这里往回取。
     pub(crate) history: Vec<Played>,
@@ -48,6 +50,7 @@ impl Playback {
             player,
             playing_index: None,
             origin: Origin::Library,
+            loads: 0,
             queue: VecDeque::new(),
             history: Vec::new(),
             scope: Scope::Library,
@@ -75,8 +78,9 @@ pub struct ViewState {
     pub(crate) folder_selected: usize,
     /// 跳转点面板的光标：当前曲目的第几个跳转点。
     pub(crate) marks_selected: usize,
-    /// 跳转点面板是为哪一首打开的；换了曲目时光标要重新落到当前所在段。
-    pub(crate) marks_path: Option<PathBuf>,
+    /// 跳转点面板是为哪一项打开的：文件和来源。换了一项（包括同一个文件的另一个片段）时，
+    /// 光标要重新落到当前所在段。
+    pub(crate) marks_for: Option<(PathBuf, Origin)>,
     /// 帮助弹层往下滚了几行。终端够高时界面不使用它。
     pub(crate) help_scroll: usize,
     /// 新建播放列表或给跳转点改名时输入的名称。

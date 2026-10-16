@@ -82,15 +82,15 @@ impl App {
             SleepTimer::EndOfTrack => {
                 // 按这一条剩下的时长淡出；往回跳转时音量随之回升。有终点时在终点停，
                 // 按离终点的时间算；跳过了终点就一直放到文件结尾，改按离结尾的时间算。
-                // 不知道总时长就不淡出，播完照样停止。
-                let gain = match self.effective_duration() {
-                    Some(duration) if self.playback.player.state() != PlayState::Stopped => {
+                // 播放列表的条目在条目的结尾停。不知道总时长就不淡出，播完照样停止。
+                let gain = match self.span().end {
+                    Some(item_end) if self.playback.player.state() != PlayState::Stopped => {
                         let position = self.playback.player.position();
                         let end = self
                             .current_bounds()
                             .end
                             .filter(|end| position < *end)
-                            .unwrap_or(duration);
+                            .unwrap_or(item_end);
                         fade_gain(end.saturating_sub(position), self.config.sleep_fade)
                     }
                     _ => 1.0,

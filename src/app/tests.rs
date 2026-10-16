@@ -4473,3 +4473,297 @@ fn a_session_in_a_playlist_comes_back_to_the_same_entry_and_scope() {
     assert_eq!(scope(&app), None);
     assert_eq!(app.playback.origin, super::scope::Origin::Library);
 }
+
+/// 在已有的曲库上建一个列表“睡前”。每条是曲库里的第几首、开头和结尾（分钟）以及名字。
+fn add_clips(app: &mut App, entries: &[(usize, u32, Option<u32>, Option<&str>)]) {
+    let index = app.playlists.create("睡前").unwrap();
+    for (track, start, end, name) in entries {
+        let item = app.catalog.tracks()[*track].clone();
+        let range = crate::playlist::Range {
+            start: MINUTE * *start,
+            end: end.map(|end| MINUTE * end),
+        };
+        let _ = app
+            .playlists
+            .add_entry(index, &item, range, name.map(str::to_owned))
+            .unwrap();
+    }
+}
+
+const SECOND: Duration = Duration::from_secs(1);
+
+#[test]
+fn a_clip_plays_in_its_own_time_from_its_start_to_its_end() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(
+        &mut app,
+        &[
+            (0, 5, Some(15), Some("掏耳")),
+            (0, 15, None, None),
+            (2, 0, None, None),
+        ],
+    );
+
+    play_from_playlist(&mut app, 0);
+    // 直接从片段开头装载，结尾交给播放器。
+    assert_eq!(playing(&app), paths[0]);
+    assert_eq!(app.player().position(), 5 * MINUTE);
+    assert_eq!(control.stop_at(), Some(15 * MINUTE));
+    assert_eq!(app.shown_position(), Duration::ZERO);
+    assert_eq!(app.shown_duration(), Some(10 * MINUTE));
+    let first = app.media_snapshot();
+    assert_eq!(first.title, "rec1 · 掏耳");
+    assert_eq!(first.duration, Some(10 * MINUTE));
+    assert!(app.playback.player.seek_to(7 * MINUTE + 30 * SECOND));
+    assert_eq!(app.media_snapshot().position, 2 * MINUTE + 30 * SECOND);
+
+    // 放到结尾接下一条：同一个文件的下一段，放到文件结尾；曲目 ID 跟着换。
+    finish(&mut app, &control);
+    assert_eq!(app.player().position(), 15 * MINUTE);
+    assert_eq!(control.stop_at(), None);
+    assert_eq!(app.shown_duration(), Some(5 * MINUTE));
+    let second = app.media_snapshot();
+    assert_eq!(second.title, "rec1");
+    assert_ne!(second.track_id, first.track_id);
+    // 隐私模式照旧只给通用标题。
+    press(&mut app, key(KeyCode::Char('i')));
+    assert_eq!(app.media_snapshot().title, "正在播放");
+
+    finish(&mut app, &control);
+    assert_eq!(playing(&app), paths[2]);
+    assert_eq!(app.player().position(), Duration::ZERO);
+}
+
+#[test]
+fn seeking_in_a_clip_stops_at_its_start_and_past_its_end_moves_on() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(
+        &mut app,
+        &[(0, 5, Some(15), Some("掏耳")), (2, 0, None, None)],
+    );
+    play_from_playlist(&mut app, 0);
+
+    // 系统媒体控制的 SetPosition 用片段内的时间；超出片段长度不动。
+    let id = app.media_snapshot().track_id;
+    app.dispatch(Action::SeekTo {
+        position: MINUTE,
+        track_id: Some(id.clone()),
+    });
+    assert_eq!(app.player().position(), 6 * MINUTE);
+    app.dispatch(Action::SeekTo {
+        position: 10 * MINUTE,
+        track_id: Some(id),
+    });
+    assert_eq!(app.player().position(), 6 * MINUTE);
+
+    // 往前退到片段开头为止，Seeked 报告片段内的时间。
+    app.drain_media_events();
+    press(&mut app, key(KeyCode::Char('H')));
+    press(&mut app, key(KeyCode::Char('H')));
+    assert_eq!(app.player().position(), 5 * MINUTE);
+    assert_eq!(
+        app.drain_media_events(),
+        vec![
+            crate::media::MediaEvent::Seeked {
+                position: Duration::ZERO
+            };
+            2
+        ]
+    );
+
+    // 0–9 按片段长度换算，0 回到片段开头。
+    press(&mut app, key(KeyCode::Char('5')));
+    assert_eq!(app.player().position(), 10 * MINUTE);
+    press(&mut app, key(KeyCode::Char('0')));
+    assert_eq!(app.player().position(), 5 * MINUTE);
+
+    // 越过结尾直接放下一条，不会放到片段之后的部分。
+    assert!(app.playback.player.seek_to(14 * MINUTE + 30 * SECOND));
+    press(&mut app, key(KeyCode::Char('L')));
+    assert_eq!(playing(&app), paths[2]);
+
+    // 点到进度条最右端也是下一条；这是最后一条，列表放完了。
+    app.dispatch(Action::SeekToRatio(1.0));
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(app.view.message.as_deref(), Some("播放列表“睡前”已播完"));
+}
+
+#[test]
+fn a_clip_shows_and_jumps_between_its_own_marks_in_clip_time() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    let paths = marks_fixture(&mut app, &music, &[2, 5, 8, 12, 15, 18], MINUTE);
+    add_clips(&mut app, &[(0, 5, Some(15), Some("掏耳"))]);
+    play_from_playlist(&mut app, 0);
+    // 片段开头算在里面，结尾不算。
+    assert_eq!(mark_positions(&app), [5 * MINUTE, 8 * MINUTE, 12 * MINUTE]);
+
+    press(&mut app, key(KeyCode::Char('}')));
+    assert_eq!(app.player().position(), 8 * MINUTE);
+    assert_eq!(app.view.message.as_deref(), Some("跳到 3:00"));
+    press(&mut app, key(KeyCode::Char('{')));
+    assert_eq!(app.player().position(), 5 * MINUTE);
+    assert_eq!(app.view.message.as_deref(), Some("跳到 0:00"));
+    press(&mut app, key(KeyCode::Char('{')));
+    assert_eq!(app.player().position(), 5 * MINUTE);
+    assert_eq!(app.view.message.as_deref(), Some("跳到开头"));
+
+    // 面板里删除、改名的是片段里的那一个，不会错到片段之前的跳转点上。
+    press(&mut app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(1));
+    press(&mut app, key(KeyCode::Char('d')));
+    assert_eq!(app.view.message.as_deref(), Some("已删除跳转点 3:00"));
+    app.dispatch(Action::SelectRow(0));
+    press(&mut app, key(KeyCode::Char('e')));
+    type_text(&mut app, "x");
+    press(&mut app, key(KeyCode::Enter));
+    let stored: Vec<(Duration, Option<String>)> = app
+        .marks
+        .store
+        .marks(&paths[0])
+        .iter()
+        .map(|mark| (mark.position, mark.name.clone()))
+        .collect();
+    assert_eq!(
+        stored,
+        [
+            (2 * MINUTE, None),
+            (5 * MINUTE, Some("x".to_owned())),
+            (12 * MINUTE, None),
+            (15 * MINUTE, None),
+            (18 * MINUTE, None),
+        ]
+    );
+
+    // 录音的起点和终点在列表里不能设。
+    press(&mut app, key(KeyCode::Char('s')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("播放列表里不用录音的起点和终点，从曲库播放时再设")
+    );
+    assert!(
+        app.marks
+            .store
+            .marks(&paths[0])
+            .iter()
+            .all(|mark| mark.role == Role::Plain)
+    );
+    press(&mut app, key(KeyCode::Esc));
+
+    // b 按文件时间存，提示里写片段内的时间。
+    assert!(app.playback.player.seek_to(10 * MINUTE));
+    press(&mut app, key(KeyCode::Char('b')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已添加跳转点 5:00（B 管理）")
+    );
+    assert!(
+        app.marks
+            .store
+            .marks(&paths[0])
+            .iter()
+            .any(|mark| mark.position == 10 * MINUTE)
+    );
+}
+
+#[test]
+fn a_clip_past_the_end_of_a_shortened_file_is_skipped_and_a_long_end_is_cut() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(
+        &mut app,
+        &[(0, 25, Some(28), Some("尾声")), (1, 18, Some(30), None)],
+    );
+
+    play_from_playlist(&mut app, 0);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已跳过“rec1 · 尾声”：片段开头 25:00 超出文件时长")
+    );
+    assert_eq!(playing(&app), paths[1]);
+    assert_eq!(app.player().position(), 18 * MINUTE);
+    assert_eq!(app.shown_duration(), Some(2 * MINUTE));
+    assert_eq!(control.stop_at(), Some(30 * MINUTE));
+}
+
+#[test]
+fn sleeping_at_the_end_of_a_clip_fades_out_before_the_clip_ends() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None), (1, 0, None, None)]);
+    play_from_playlist(&mut app, 0);
+    sleep_at_track_end(&mut app);
+
+    // 离片段结尾还剩 15 秒，淡出到一半。
+    assert!(app.playback.player.seek_to(15 * MINUTE - 15 * SECOND));
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 0.25);
+    finish(&mut app, &control);
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("睡眠定时：本条已播完，播放停止")
+    );
+}
+
+#[test]
+fn a_session_in_a_clip_comes_back_in_clip_time() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), Some("掏耳"))]);
+    let tracks = app.catalog.tracks().to_vec();
+    play_from_playlist(&mut app, 0);
+
+    // 离结尾 3 秒以内、或者不在片段里（条目改过）时，从片段开头开始。
+    for (at, restored) in [
+        (7 * MINUTE, 7 * MINUTE),
+        (15 * MINUTE - 2 * SECOND, 5 * MINUTE),
+        (3 * MINUTE, 5 * MINUTE),
+    ] {
+        assert!(app.playback.player.seek_to(at));
+        app.save_session().unwrap();
+        let mut restarted = app_in(temp.path(), "music", AppConfig::default());
+        restarted.apply_scan_finished(tracks.clone(), Vec::new());
+        assert_eq!(restarted.player().position(), restored, "{at:?}");
+        assert_eq!(scope(&restarted), in_list(Some(1), 1));
+        assert_eq!(restarted.shown_duration(), Some(10 * MINUTE));
+        if at == 7 * MINUTE {
+            assert_eq!(
+                restarted.view.message.as_deref(),
+                Some("已恢复上次播放：睡前 1/1 rec1 · 掏耳 2:00，按空格继续")
+            );
+        }
+    }
+}
+
+#[test]
+fn the_screen_shows_a_clips_name_and_its_own_time() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[2, 8], MINUTE);
+    add_clips(&mut app, &[(0, 5, Some(15), Some("掏耳"))]);
+    play_from_playlist(&mut app, 0);
+    assert!(app.playback.player.seek_to(8 * MINUTE));
+
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    assert!(screen.contains("rec1·掏耳"), "{screen}");
+    assert!(screen.contains("睡前1/1·顺序"), "{screen}");
+    // 进度条两端是片段内的位置和片段长度。
+    let bar = screen
+        .lines()
+        .find(|row| row.contains("10:00"))
+        .unwrap_or_else(|| panic!("{screen}"));
+    assert!(bar.starts_with("│3:00"), "{bar}");
+
+    // 面板只列片段里的跳转点，时间也是片段内的。
+    press(&mut app, key(KeyCode::Char('B')));
+    let (_, backend) = render(&app, 100, 30);
+    let popup = popup_text(&backend);
+    assert!(popup.contains("●3:00"), "{popup}");
+    assert!(
+        !popup.contains("2:00") && !popup.contains("8:00"),
+        "{popup}"
+    );
+}

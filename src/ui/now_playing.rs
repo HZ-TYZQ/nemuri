@@ -113,7 +113,8 @@ pub(super) fn draw_now_playing(
                 (None, Folder::Named(name)) => Some(name.as_str()),
                 (None, Folder::Root) => None,
             };
-            let (title, artist) = now_playing_text(track.display_title(), byline, budget);
+            let title = app.item_title().unwrap_or_default();
+            let (title, artist) = now_playing_text(&title, byline, budget);
             Line::from(vec![
                 Span::styled(icon, style),
                 Span::styled(title, Style::new().fg(theme.primary).bold()),

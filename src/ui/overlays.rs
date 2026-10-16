@@ -44,7 +44,7 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: 
             let at = app
                 .current_marks()
                 .get(app.view().marks_selected)
-                .map(|mark| fmt_duration(mark.position))
+                .map(|mark| fmt_duration(app.shown(mark.position)))
                 .unwrap_or_default();
             draw_text_popup(
                 frame,
@@ -402,9 +402,10 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         .border_style(Style::new().fg(theme.border));
 
     let current = app.current_section();
+    // 放片段时按片段内的时间显示，和进度条一致。
     let time_width = marks
         .iter()
-        .map(|mark| fmt_duration(mark.position).len())
+        .map(|mark| fmt_duration(app.shown(mark.position)).len())
         .max()
         .unwrap_or_default();
     // 去掉左右边框、highlight_symbol、标记、时间和时间后的两列间隔。
@@ -413,7 +414,7 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         .max(1);
     let items = marks.iter().enumerate().map(|(index, mark)| {
         let marker = if current == Some(index) { "● " } else { "  " };
-        let time = format!("{:>time_width$}", fmt_duration(mark.position));
+        let time = format!("{:>time_width$}", fmt_duration(app.shown(mark.position)));
         let tag = match mark.role {
             Role::Plain => None,
             Role::Start => Some("起点"),
