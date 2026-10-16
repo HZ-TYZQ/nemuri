@@ -49,26 +49,29 @@ impl App {
         self.seek_to_requested(duration.mul_f64(ratio), None);
     }
 
-    pub(super) fn seek_to_requested(&mut self, position: Duration, track_id: Option<&str>) {
+    /// 跳到绝对位置；跳成了返回 true。
+    pub(super) fn seek_to_requested(&mut self, position: Duration, track_id: Option<&str>) -> bool {
         if self.output_blocks_playback() {
-            return;
+            return false;
         }
         if self.playback.player.state() == PlayState::Stopped {
-            return;
+            return false;
         }
         if let Some(expected) = track_id
             && expected != self.current_track_id()
         {
-            return;
+            return false;
         }
         if let Some(duration) = self.effective_duration()
             && position > duration
         {
-            return;
+            return false;
         }
-        if self.playback.player.seek_to(position) {
+        let moved = self.playback.player.seek_to(position);
+        if moved {
             self.push_seeked(self.playback.player.position());
         }
+        moved
     }
 
     pub(super) fn effective_duration(&self) -> Option<Duration> {

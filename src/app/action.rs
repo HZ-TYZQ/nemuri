@@ -44,6 +44,11 @@ pub enum Action {
     SetShuffle(bool),
     /// 睡眠定时切换到下一档：关、15–120 分钟。
     CycleSleepTimer,
+    /// 在当前位置给正在播放的长录音加跳转点。
+    AddMark,
+    /// 跳到上一个跳转点；刚过一个点不久时跳到再前面一个。
+    PreviousMark,
+    NextMark,
 
     // 显示与曲库
     ToggleVisualizer,
@@ -90,6 +95,11 @@ pub enum Action {
     ClearQueue,
     /// 选中的队列条目上移（负数）或下移（正数）。
     MoveInQueue(isize),
+
+    // 跳转点面板
+    RemoveMark,
+    /// 打开给选中跳转点改名的输入框。
+    RenameMark,
 }
 
 impl From<MediaCommand> for Action {
@@ -162,6 +172,7 @@ impl App {
             Action::Enqueue => self.enqueue_selected(false),
             Action::EnqueueNext => self.enqueue_selected(true),
             Action::OpenOverlay(Overlay::Folders) => self.open_folders(),
+            Action::OpenOverlay(Overlay::Marks) => self.open_marks(),
             Action::OpenOverlay(Overlay::Help) => {
                 self.view.help_scroll = 0;
                 self.view.overlay = Overlay::Help;
@@ -196,7 +207,14 @@ impl App {
             Action::RemoveFromQueue => self.remove_queue_selected(),
             Action::ClearQueue => self.clear_queue(),
             Action::MoveInQueue(offset) => self.move_queue_selected(offset),
+            Action::AddMark => self.add_mark(),
+            Action::PreviousMark => self.jump_to_previous_mark(),
+            Action::NextMark => self.jump_to_next_mark(),
+            Action::RemoveMark => self.remove_selected_mark(),
+            Action::RenameMark => self.start_renaming_mark(),
         }
+        // 系统媒体控制可能刚切了歌，跳转点面板要跟上。
+        self.sync_marks_panel();
     }
 
     /// 光标在焦点列表里移动一格；到头时停住。
@@ -225,11 +243,15 @@ impl App {
                 self.view.folder_selected =
                     step(self.view.folder_selected, self.catalog.folders().len() + 1);
             }
+            Overlay::Marks => {
+                self.view.marks_selected =
+                    step(self.view.marks_selected, self.current_marks().len());
+            }
             // 只有界面知道弹层多高，往下滚到底时由它不再发出 CursorDown。
             Overlay::Help => {
                 self.view.help_scroll = self.view.help_scroll.saturating_add_signed(delta);
             }
-            Overlay::NameInput | Overlay::DeleteConfirm => {}
+            Overlay::NameInput | Overlay::DeleteConfirm | Overlay::MarkName => {}
         }
     }
 
@@ -243,7 +265,8 @@ impl App {
             Overlay::PlaylistTracks => self.view.playlist_track_selected = row,
             Overlay::Queue => self.view.queue_selected = row,
             Overlay::Folders => self.view.folder_selected = row,
-            Overlay::Help | Overlay::NameInput | Overlay::DeleteConfirm => {}
+            Overlay::Marks => self.view.marks_selected = row,
+            Overlay::Help | Overlay::NameInput | Overlay::DeleteConfirm | Overlay::MarkName => {}
         }
     }
 
@@ -265,6 +288,8 @@ impl App {
             Overlay::Queue => self.play_queue_selected(),
             Overlay::Folders => self.apply_selected_folder(),
             Overlay::NameInput => self.create_playlist(),
+            Overlay::Marks => self.jump_to_selected_mark(),
+            Overlay::MarkName => self.rename_selected_mark(),
             Overlay::Help | Overlay::DeleteConfirm => {}
         }
     }
@@ -273,18 +298,21 @@ impl App {
         match self.view.overlay {
             Overlay::None if self.view.search_active => self.cancel_search(),
             Overlay::None => self.view.message = None,
-            Overlay::Help | Overlay::Playlists | Overlay::Queue | Overlay::Folders => {
-                self.view.overlay = Overlay::None
-            }
+            Overlay::Help
+            | Overlay::Playlists
+            | Overlay::Queue
+            | Overlay::Folders
+            | Overlay::Marks => self.view.overlay = Overlay::None,
             Overlay::PlaylistTracks | Overlay::NameInput | Overlay::DeleteConfirm => {
                 self.view.overlay = Overlay::Playlists;
             }
+            Overlay::MarkName => self.view.overlay = Overlay::Marks,
         }
     }
 
     fn input_char(&mut self, character: char) {
         match self.view.overlay {
-            Overlay::NameInput => self.view.name_input.push(character),
+            Overlay::NameInput | Overlay::MarkName => self.view.name_input.push(character),
             Overlay::None if self.view.search_active => {
                 let mut query = self.catalog.query().to_owned();
                 query.push(character);
@@ -296,7 +324,7 @@ impl App {
 
     fn input_backspace(&mut self) {
         match self.view.overlay {
-            Overlay::NameInput => {
+            Overlay::NameInput | Overlay::MarkName => {
                 self.view.name_input.pop();
             }
             Overlay::None if self.view.search_active => {

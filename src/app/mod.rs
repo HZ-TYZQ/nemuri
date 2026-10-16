@@ -4,6 +4,7 @@ mod action;
 mod catalog;
 mod folders;
 mod lyrics;
+mod marks;
 mod media;
 mod order;
 mod playback;
@@ -24,6 +25,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::config::{AppConfig, AppPaths};
 use crate::library::{LibraryEvent, LibraryWorker};
+use crate::marks::MarkStore;
 use crate::player::{PlayState, PlaybackBackend, Player, PlayerEvent};
 use crate::playlist::PlaylistStore;
 use crate::progress::ProgressStore;
@@ -32,6 +34,7 @@ use crate::track::Track;
 
 pub use action::Action;
 pub use catalog::Catalog;
+use marks::Marks;
 use playback::Skip;
 use progress::Progress;
 use sleep::SleepTimer;
@@ -48,6 +51,10 @@ pub enum Overlay {
     Folders,
     NameInput,
     DeleteConfirm,
+    /// 当前曲目的跳转点。
+    Marks,
+    /// 给面板里选中的跳转点改名。
+    MarkName,
 }
 
 /// 曲库变动前记下的曲目，变动后按路径找回它们的新下标。
@@ -72,6 +79,7 @@ pub struct App {
     view: ViewState,
     playlists: PlaylistStore,
     progress: Progress,
+    marks: Marks,
     config: AppConfig,
     /// 启动时的设置。退出时与 `config` 比较，只把改过的项写回配置文件。
     config_at_start: AppConfig,
@@ -84,7 +92,7 @@ pub struct App {
     save_config_on_exit: bool,
     /// 上次退出时的曲目与位置，等第一次扫描完成、曲库就绪后再恢复。
     pending_session: Option<Session>,
-    /// 启动时的提示：配置写错了、刚复制了旧目录、播放列表或进度读不了。
+    /// 启动时的提示：配置写错了、刚复制了旧目录、播放列表、进度或跳转点读不了。
     /// 第一次扫描完成时的提示会盖掉它；那时它还没被别的操作换掉，就放回底栏。
     startup_note: Option<String>,
     /// 最近一次 tick 的时间。按键在两次 tick 之间处理，定时以它为准，
@@ -126,6 +134,7 @@ impl App {
             .map_err(|error| format!("无法打开播放列表目录: {error}"))?;
         let playlist_warning = playlists.warnings().first().cloned();
         let (progress, progress_warning) = ProgressStore::load(&paths.progress_file);
+        let (marks, marks_warning) = MarkStore::load(&paths.marks_file);
         let now = Instant::now();
         let scanner = LibraryWorker::start(library_dir.clone(), paths.cache_db.clone());
         let pending_session =
@@ -134,9 +143,14 @@ impl App {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos() as u64;
-        // 读不了的播放列表和收听进度排在最前面；几条提示都要显示，不能只留第一条，
+        // 读不了的播放列表、收听进度和跳转点排在最前面；几条提示都要显示，不能只留第一条，
         // 否则升级时总会出现的“已复制旧目录”会把它们挤掉。
-        let startup_note = join_notes([playlist_warning, progress_warning, initial_warning]);
+        let startup_note = join_notes([
+            playlist_warning,
+            progress_warning,
+            marks_warning,
+            initial_warning,
+        ]);
         Ok(Self {
             catalog: Catalog::new(),
             playback: Playback::new(player, seed),
@@ -146,6 +160,7 @@ impl App {
             },
             playlists,
             progress: Progress::new(progress, now),
+            marks: Marks::new(marks),
             config_at_start: config.clone(),
             config,
             library_dir,
@@ -230,6 +245,7 @@ impl App {
         self.restore_pending_selection();
         self.clamp_selections();
         self.drain_player_events();
+        self.sync_marks_panel();
         self.tick_timers(now);
 
         if self.config.visualizer_enabled && self.playback.player.state() != PlayState::Playing {
@@ -365,6 +381,7 @@ impl App {
             .filter(|note| self.view.message.as_ref() == Some(note));
         self.replace_tracks(tracks);
         self.follow_renamed_progress();
+        self.follow_renamed_marks();
         // 重扫往往是因为刚放进了 .lrc 文件，下一个 tick 重新读取歌词。
         self.playback.lyrics = None;
         self.scan_progress = None;

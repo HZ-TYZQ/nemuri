@@ -152,6 +152,19 @@ pub(super) const LIBRARY: &[Binding] = &[
         ],
     ),
     listed(
+        "b / B",
+        "加跳转点 / 跳转点面板",
+        &[
+            (ch('b'), Action::AddMark),
+            (ch('B'), Action::OpenOverlay(Overlay::Marks)),
+        ],
+    ),
+    listed(
+        "{ / }",
+        "上一个 / 下一个跳转点",
+        &[(ch('{'), Action::PreviousMark), (ch('}'), Action::NextMark)],
+    ),
+    listed(
         "- / = · [ / ]",
         "音量 ±5% / ±1%",
         &[
@@ -336,6 +349,29 @@ pub(super) const FOLDERS: &[Binding] = &[
     ),
 ];
 
+pub(super) const MARKS: &[Binding] = &[
+    hidden(CURSOR),
+    listed(
+        "Enter",
+        "跳到这里",
+        &[(code(KeyCode::Enter), Action::Activate)],
+    ),
+    listed("e", "改名", &[(ch('e'), Action::RenameMark)]),
+    listed("d", "删除", &[(ch('d'), Action::RemoveMark)]),
+    listed(
+        "Esc",
+        "关闭",
+        &[(code(KeyCode::Esc), Action::Back), (ch('B'), Action::Back)],
+    ),
+];
+
+/// 输入框里没有绑定的字符都当作输入。
+pub(super) const MARK_NAME: &[Binding] = &[
+    listed("Enter", "确定", &[(code(KeyCode::Enter), Action::Activate)]),
+    listed("Esc", "取消", &[(code(KeyCode::Esc), Action::Back)]),
+    hidden(&[(code(KeyCode::Backspace), Action::InputBackspace)]),
+];
+
 /// 输入框里没有绑定的字符都当作输入。
 pub(super) const NAME_INPUT: &[Binding] = &[
     listed("Enter", "创建", &[(code(KeyCode::Enter), Action::Activate)]),
@@ -376,6 +412,8 @@ fn bindings_for(app: &App) -> (&'static [Binding], bool) {
         Overlay::Folders => (FOLDERS, false),
         Overlay::NameInput => (NAME_INPUT, true),
         Overlay::DeleteConfirm => (DELETE_CONFIRM, false),
+        Overlay::Marks => (MARKS, false),
+        Overlay::MarkName => (MARK_NAME, true),
     }
 }
 

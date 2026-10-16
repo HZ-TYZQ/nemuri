@@ -1,4 +1,4 @@
-//! 帮助、播放列表、播放队列、文件夹和确认弹层。
+//! 帮助、播放列表、播放队列、文件夹、跳转点和确认弹层。
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,8 @@ use crate::theme::Theme;
 use crate::track::Track;
 
 use super::keymap::{
-    self, DELETE_CONFIRM, FOLDERS, HELP, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS, QUEUE,
+    self, DELETE_CONFIRM, FOLDERS, HELP, MARK_NAME, MARKS, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS,
+    QUEUE,
 };
 use super::text::{fmt_duration, now_playing_text, truncate_display};
 use super::{ListView, ViewLayout};
@@ -22,7 +23,11 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: 
     // 非列表型弹层没有可点击的行；先失效，命中测试才不会用上一帧的坐标。
     if !matches!(
         app.view().overlay,
-        Overlay::Playlists | Overlay::PlaylistTracks | Overlay::Queue | Overlay::Folders
+        Overlay::Playlists
+            | Overlay::PlaylistTracks
+            | Overlay::Queue
+            | Overlay::Folders
+            | Overlay::Marks
     ) {
         view.clear();
     }
@@ -33,6 +38,27 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: 
         Overlay::Queue => draw_queue(frame, app, theme, view),
         Overlay::PlaylistTracks => draw_playlist_tracks(frame, app, theme, view),
         Overlay::Folders => draw_folders(frame, app, theme, view),
+        Overlay::Marks => draw_marks(frame, app, theme, view),
+        Overlay::MarkName => {
+            let at = app
+                .current_marks()
+                .get(app.view().marks_selected)
+                .map(|mark| fmt_duration(mark.position))
+                .unwrap_or_default();
+            draw_text_popup(
+                frame,
+                " 跳转点改名 ",
+                vec![
+                    &format!("{at} 的名字（留空只显示时间）："),
+                    &format!("> {}█", app.view().name_input),
+                    "",
+                    &keymap::hints(MARK_NAME),
+                ],
+                58,
+                8,
+                theme,
+            );
+        }
         Overlay::NameInput => draw_text_popup(
             frame,
             " 新建播放列表 ",
@@ -338,6 +364,78 @@ fn draw_folders(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView
     let help = help_row(inner);
     frame.render_widget(
         Paragraph::new(keymap::hints(FOLDERS)).style(Style::new().fg(theme.muted)),
+        help,
+    );
+}
+
+/// 当前曲目的跳转点，每行是右对齐的时间和名字，当前所在段用 ● 标出。
+fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
+    let marks = app.current_marks();
+    if marks.is_empty() {
+        view.clear();
+        return;
+    }
+    // 列表行、上下边框和提示行。
+    let area = centered(frame.area(), 60, (marks.len() as u16).saturating_add(3));
+    frame.render_widget(Clear, area);
+    let prefix = " 跳转点 · ";
+    let title_width = usize::from(area.width)
+        .saturating_sub(2 + 2 + UnicodeWidthStr::width(prefix) + 1)
+        .max(1);
+    let title = app
+        .current_track()
+        .map(|track| truncate_display(track.display_title(), title_width))
+        .unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(Span::styled(
+            format!("{prefix}{title} "),
+            Style::new().fg(theme.primary).bold(),
+        ))
+        .border_style(Style::new().fg(theme.border));
+
+    let current = app.current_section();
+    let time_width = marks
+        .iter()
+        .map(|mark| fmt_duration(mark.position).len())
+        .max()
+        .unwrap_or_default();
+    // 去掉左右边框、highlight_symbol、标记、时间和时间后的两列间隔。
+    let name_width = usize::from(area.width)
+        .saturating_sub(2 + 2 + 2 + time_width + 2)
+        .max(1);
+    let items = marks.iter().enumerate().map(|(index, mark)| {
+        let marker = if current == Some(index) { "● " } else { "  " };
+        let time = format!("{:>time_width$}", fmt_duration(mark.position));
+        let mut spans = vec![Span::styled(marker, Style::new().fg(theme.primary))];
+        match &mark.name {
+            Some(name) => spans.extend([
+                Span::styled(time, Style::new().fg(theme.muted)),
+                Span::raw("  "),
+                Span::styled(
+                    truncate_display(name, name_width),
+                    Style::new().fg(theme.primary),
+                ),
+            ]),
+            None => spans.push(Span::styled(time, Style::new().fg(theme.primary))),
+        }
+        ListItem::new(Line::from(spans))
+    });
+
+    let (inner, viewport) = list_viewport(area, &block);
+    frame.render_widget(block, area);
+    let list = List::new(items)
+        .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
+        .highlight_style(Style::new().bg(theme.selection_bg).bold());
+    frame.render_stateful_widget(
+        list,
+        viewport,
+        view.state_for(Some(app.view().marks_selected)),
+    );
+    view.record(viewport, marks.len());
+    let help = help_row(inner);
+    frame.render_widget(
+        Paragraph::new(keymap::hints(MARKS)).style(Style::new().fg(theme.muted)),
         help,
     );
 }

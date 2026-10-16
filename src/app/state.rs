@@ -64,9 +64,13 @@ pub struct ViewState {
     pub(crate) queue_selected: usize,
     /// 文件夹面板的光标：第 0 行是“全部”，之后依次是各个文件夹。
     pub(crate) folder_selected: usize,
+    /// 跳转点面板的光标：当前曲目的第几个跳转点。
+    pub(crate) marks_selected: usize,
+    /// 跳转点面板是为哪一首打开的；换了曲目时光标要重新落到当前所在段。
+    pub(crate) marks_path: Option<PathBuf>,
     /// 帮助弹层往下滚了几行。终端够高时界面不使用它。
     pub(crate) help_scroll: usize,
-    /// 新建播放列表时输入的名称。
+    /// 新建播放列表或给跳转点改名时输入的名称。
     pub(crate) name_input: String,
     /// 底栏显示的一行提示。
     pub(crate) message: Option<String>,

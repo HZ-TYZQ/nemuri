@@ -80,11 +80,14 @@ fn run_application() -> Result<(), String> {
     let restore_result =
         restore_terminal(&mut terminal).map_err(|error| format!("无法恢复终端状态: {error}"));
     let save_result = app.save_settings();
-    // 会话和收听进度只是便利功能，保存失败不应让整个程序以失败退出。
+    // 会话、收听进度和跳转点只是便利功能，保存失败不应让整个程序以失败退出。
     if let Err(error) = app.save_session() {
         eprintln!("nemuri: {error}");
     }
     if let Err(error) = app.save_progress() {
+        eprintln!("nemuri: {error}");
+    }
+    if let Err(error) = app.save_marks() {
         eprintln!("nemuri: {error}");
     }
 

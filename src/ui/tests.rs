@@ -12,8 +12,8 @@ use crate::track::Track;
 
 use super::ListView;
 use super::keymap::{
-    self, DELETE_CONFIRM, FOLDERS, HELP, Key, LIBRARY, NAME_INPUT, PLAYLIST_TRACKS, PLAYLISTS,
-    QUEUE, SEARCH,
+    self, DELETE_CONFIRM, FOLDERS, HELP, Key, LIBRARY, MARK_NAME, MARKS, NAME_INPUT,
+    PLAYLIST_TRACKS, PLAYLISTS, QUEUE, SEARCH,
 };
 use super::library::{
     INACTIVE_ICON, LIST_ICON_WIDTH, PAUSE_ACTION_ICON, PLAY_ACTION_ICON, ProgressCell, RowText,
@@ -402,6 +402,8 @@ fn every_binding_is_reachable_in_its_table() {
         ("folders", FOLDERS, false),
         ("name input", NAME_INPUT, true),
         ("delete confirm", DELETE_CONFIRM, false),
+        ("marks", MARKS, false),
+        ("mark name", MARK_NAME, true),
     ];
     for (name, table, text_input) in tables {
         for binding in table {
@@ -436,6 +438,11 @@ fn generated_hints_keep_the_overlay_wording() {
     );
     assert_eq!(keymap::hints(FOLDERS), "Enter 只看此文件夹 · Esc 关闭");
     assert_eq!(keymap::hints(NAME_INPUT), "Enter 创建 · Esc 取消");
+    assert_eq!(
+        keymap::hints(MARKS),
+        "Enter 跳到这里 · e 改名 · d 删除 · Esc 关闭"
+    );
+    assert_eq!(keymap::hints(MARK_NAME), "Enter 确定 · Esc 取消");
     assert_eq!(keymap::hints(DELETE_CONFIRM), "y 确认 · n/Esc 取消");
     assert_eq!(keymap::hints(HELP), "? / Esc 关闭");
     assert_eq!(keymap::hints(SEARCH), "Enter 播放 · Esc 清除");
@@ -447,7 +454,7 @@ fn help_lines_align_their_descriptions() {
     let lines = keymap::help_lines();
     assert_eq!(
         lines.len(),
-        24,
+        26,
         "帮助行数变了：README 和手册页的按键表也要跟着改"
     );
     for (line, binding) in lines

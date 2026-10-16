@@ -3126,3 +3126,389 @@ fn a_footer_that_would_take_more_than_a_third_of_the_screen_ends_in_an_ellipsis(
     assert_eq!(footer.len(), 8, "{rows:#?}");
     assert!(footer[0].ends_with('…'), "{}", footer[0]);
 }
+
+/// 正在播放 rec1（20 分钟），在 `minutes` 的每个位置各按一次 b，最后停在 `at`。
+fn marks_fixture(app: &mut App, music: &Path, minutes: &[u32], at: Duration) -> Vec<PathBuf> {
+    let paths = recordings_fixture(app, music);
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    for minute in minutes {
+        assert!(app.playback.player.seek_to(MINUTE * *minute));
+        press(app, key(KeyCode::Char('b')));
+    }
+    assert!(app.playback.player.seek_to(at));
+    paths
+}
+
+fn mark_positions(app: &App) -> Vec<Duration> {
+    app.current_marks()
+        .iter()
+        .map(|mark| mark.position)
+        .collect()
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for character in text.chars() {
+        press(app, key(KeyCode::Char(character)));
+    }
+}
+
+#[test]
+fn b_adds_a_mark_at_the_current_position_once() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    let file = temp.path().join("data/nemuri/marks.json");
+
+    for at in [5 * MINUTE, AT_12_34, 2 * MINUTE] {
+        assert!(app.playback.player.seek_to(at));
+        press(&mut app, key(KeyCode::Char('b')));
+    }
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已添加跳转点 2:00（B 管理）")
+    );
+    assert_eq!(mark_positions(&app), [2 * MINUTE, 5 * MINUTE, AT_12_34]);
+    // 改了就写盘，不等退出。
+    assert!(std::fs::read_to_string(&file).unwrap().contains("754000"));
+
+    // 不到 1 秒算同一处。
+    assert!(
+        app.playback
+            .player
+            .seek_to(5 * MINUTE + Duration::from_millis(500))
+    );
+    press(&mut app, key(KeyCode::Char('b')));
+    assert_eq!(app.view.message.as_deref(), Some("这里已有跳转点 5:00"));
+    assert_eq!(mark_positions(&app).len(), 3);
+}
+
+#[test]
+fn braces_jump_between_marks_and_stop_at_either_end() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(
+        &mut app,
+        &temp.path().join("music"),
+        &[5, 10],
+        Duration::ZERO,
+    );
+    let previous = key(KeyCode::Char('{'));
+    let next = key(KeyCode::Char('}'));
+
+    press(&mut app, next);
+    assert_eq!(app.player().position(), 5 * MINUTE);
+    assert_eq!(app.view.message.as_deref(), Some("跳到 5:00"));
+    // 系统媒体控制也知道位置变了。
+    assert!(!app.drain_media_events().is_empty());
+    press(&mut app, next);
+    assert_eq!(app.player().position(), 10 * MINUTE);
+    // 最后一个之后不跳到结尾，免得记成听完。
+    press(&mut app, next);
+    assert_eq!(app.player().position(), 10 * MINUTE);
+    assert_eq!(app.view.message.as_deref(), Some("后面没有跳转点"));
+
+    // 刚跳到一个点之后 3 秒内往前跳，跳到再前面一个。
+    assert!(
+        app.playback
+            .player
+            .seek_to(10 * MINUTE + Duration::from_secs(2))
+    );
+    press(&mut app, previous);
+    assert_eq!(app.player().position(), 5 * MINUTE);
+    assert!(app.playback.player.seek_to(12 * MINUTE));
+    press(&mut app, previous);
+    assert_eq!(app.player().position(), 10 * MINUTE);
+    // 第一个之前回到开头。
+    assert!(app.playback.player.seek_to(6 * MINUTE));
+    press(&mut app, previous);
+    press(&mut app, previous);
+    assert_eq!(app.player().position(), Duration::ZERO);
+    assert_eq!(app.view.message.as_deref(), Some("跳到开头"));
+}
+
+#[test]
+fn mark_keys_only_explain_themselves_without_a_playing_long_recording() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    let keys = ['b', 'B', '{', '}'];
+
+    for character in keys {
+        press(&mut app, key(KeyCode::Char(character)));
+        assert_eq!(
+            app.view.message.as_deref(),
+            Some("先开始播放，才能使用跳转点")
+        );
+    }
+
+    // 100 秒的歌。
+    app.play_index(2, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(Duration::from_secs(50)));
+    for character in keys {
+        press(&mut app, key(KeyCode::Char(character)));
+        assert_eq!(
+            app.view.message.as_deref(),
+            Some("只有 10 分钟以上的录音能设跳转点")
+        );
+        assert_eq!(app.player().position(), Duration::from_secs(50));
+    }
+    assert!(!temp.path().join("data/nemuri/marks.json").exists());
+
+    // 没有跳转点的长录音：不打开面板，往前也不会跳回开头。
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(AT_12_34));
+    for character in ['B', '{', '}'] {
+        press(&mut app, key(KeyCode::Char(character)));
+        assert_eq!(
+            app.view.message.as_deref(),
+            Some("这首还没有跳转点，按 b 在当前位置添加")
+        );
+        assert_eq!(app.view.overlay, Overlay::None);
+        assert_eq!(app.player().position(), AT_12_34);
+    }
+}
+
+#[test]
+fn marks_work_while_paused_but_not_once_playback_has_stopped() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[], 5 * MINUTE);
+    press(&mut app, key(KeyCode::Char(' ')));
+    assert_eq!(app.player().state(), PlayState::Paused);
+
+    press(&mut app, key(KeyCode::Char('b')));
+    assert_eq!(mark_positions(&app), [5 * MINUTE]);
+    assert!(app.playback.player.seek_to(MINUTE));
+    press(&mut app, key(KeyCode::Char('}')));
+    assert_eq!(app.player().position(), 5 * MINUTE);
+    assert_eq!(app.player().state(), PlayState::Paused);
+
+    // 播完停止以后没有位置可跳。
+    press(&mut app, key(KeyCode::Char(' ')));
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    press(&mut app, key(KeyCode::Char('{')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("先开始播放，才能使用跳转点")
+    );
+    assert_eq!(app.player().state(), PlayState::Stopped);
+}
+
+#[test]
+fn the_marks_panel_jumps_renames_and_deletes() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(
+        &mut app,
+        &temp.path().join("music"),
+        &[5, 10, 15],
+        11 * MINUTE,
+    );
+    let file = temp.path().join("data/nemuri/marks.json");
+
+    // 光标落在当前所在段；Enter 跳过去并关闭面板。
+    press(&mut app, key(KeyCode::Char('B')));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(app.view.marks_selected, 1);
+    press(&mut app, key(KeyCode::Char('j')));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.overlay, Overlay::None);
+    assert_eq!(app.player().position(), 15 * MINUTE);
+    assert_eq!(app.view.message.as_deref(), Some("跳到 15:00"));
+
+    // 改名：输入框里的字母是文字，不是面板的按键。
+    press(&mut app, key(KeyCode::Char('B')));
+    assert_eq!(app.view.marks_selected, 2);
+    press(&mut app, key(KeyCode::Char('e')));
+    assert_eq!(app.view.overlay, Overlay::MarkName);
+    type_text(&mut app, "哄睡 ed");
+    press(&mut app, key(KeyCode::Backspace));
+    press(&mut app, key(KeyCode::Backspace));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(app.current_marks()[2].name.as_deref(), Some("哄睡"));
+    assert!(std::fs::read_to_string(&file).unwrap().contains("哄睡"));
+
+    // 再改名时预填现有名字；Esc 放弃，清空后确定就只剩时间。
+    press(&mut app, key(KeyCode::Char('e')));
+    assert_eq!(app.view.name_input, "哄睡");
+    type_text(&mut app, "了");
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(app.current_marks()[2].name.as_deref(), Some("哄睡"));
+    press(&mut app, key(KeyCode::Char('e')));
+    press(&mut app, key(KeyCode::Backspace));
+    press(&mut app, key(KeyCode::Backspace));
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.current_marks()[2].name, None);
+
+    // 删除不再确认；光标留在范围内，删光时关掉面板。
+    press(&mut app, key(KeyCode::Char('d')));
+    assert_eq!(app.view.message.as_deref(), Some("已删除跳转点 15:00"));
+    assert_eq!(app.view.marks_selected, 1);
+    press(&mut app, key(KeyCode::Char('d')));
+    press(&mut app, key(KeyCode::Char('d')));
+    assert_eq!(app.view.overlay, Overlay::None);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已删除最后一个跳转点 5:00")
+    );
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("rec1"));
+}
+
+#[test]
+fn the_marks_panel_follows_a_track_change() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    marks_fixture(&mut app, &music, &[5], 6 * MINUTE);
+    app.play_index(1, true, BagUpdate::Reanchor).unwrap();
+    for minute in [3, 8] {
+        assert!(app.playback.player.seek_to(MINUTE * minute));
+        press(&mut app, key(KeyCode::Char('b')));
+    }
+    assert!(app.playback.player.seek_to(9 * MINUTE));
+    press(&mut app, key(KeyCode::Char('B')));
+    assert_eq!(app.view.marks_selected, 1);
+    press(&mut app, key(KeyCode::Char('e')));
+
+    // 系统媒体控制切到 rec1：改名作废，光标落到 rec1 当前所在段。
+    app.play_index(0, true, BagUpdate::Reanchor).unwrap();
+    app.sync_marks_panel();
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(app.view.marks_selected, 0);
+    assert_eq!(mark_positions(&app), [5 * MINUTE]);
+
+    // 换成用不了跳转点的歌：面板关掉。
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(1));
+    app.play_index(2, true, BagUpdate::Reanchor).unwrap();
+    app.sync_marks_panel();
+    assert_eq!(app.view.overlay, Overlay::None);
+}
+
+#[test]
+fn a_double_click_in_the_marks_panel_jumps_there() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[5, 10], MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    let (view, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend);
+    assert!(screen.iter().any(|row| row.contains("跳转点·rec1")));
+    let row = screen.iter().position(|row| row.contains("10:00")).unwrap() as u16;
+    let click = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 50,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    let mut input = MouseInput::default();
+    mouse(&mut app, &mut input, click, &view);
+    mouse(&mut app, &mut input, click, &view);
+    assert_eq!(app.view.overlay, Overlay::None);
+    assert_eq!(app.player().position(), 10 * MINUTE);
+}
+
+#[test]
+fn the_marks_panel_lists_times_names_and_the_current_section() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[5, 10], 11 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    press(&mut app, key(KeyCode::Char('k')));
+    press(&mut app, key(KeyCode::Char('e')));
+    type_text(&mut app, "掏耳");
+    press(&mut app, key(KeyCode::Enter));
+
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend);
+    assert!(
+        screen.iter().any(|row| row.contains("▸5:00掏耳")),
+        "{screen:#?}"
+    );
+    assert!(
+        screen.iter().any(|row| row.contains("●10:00")),
+        "{screen:#?}"
+    );
+    assert!(
+        screen
+            .iter()
+            .any(|row| row.contains("Enter跳到这里·e改名·d删除·Esc关闭"))
+    );
+
+    press(&mut app, key(KeyCode::Char('e')));
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    assert!(
+        screen.contains("5:00的名字（留空只显示时间）："),
+        "{screen}"
+    );
+    assert!(screen.contains(">掏耳█"), "{screen}");
+}
+
+#[test]
+fn marks_survive_a_restart_and_follow_a_rename() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    marks_fixture(&mut app, &music, &[5, 10], MINUTE);
+    drop(app);
+
+    let mut app = app_in(temp.path(), "music", AppConfig::default());
+    recordings_fixture(&mut app, &music);
+    let mut tracks = app.catalog.tracks().to_vec();
+    for (index, track) in tracks.iter_mut().enumerate() {
+        track.file_size = 1_000 + index as u64;
+    }
+    // 三个文件原本一样大，改名后认不出是哪一个。给它们不同的大小，
+    // 再在原名下改一次名，记录就带上了新的大小。
+    app.catalog.set_tracks(tracks.clone());
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert_eq!(mark_positions(&app), [5 * MINUTE, 10 * MINUTE]);
+    press(&mut app, key(KeyCode::Char('B')));
+    press(&mut app, key(KeyCode::Char('e')));
+    type_text(&mut app, "开头");
+    press(&mut app, key(KeyCode::Enter));
+    press(&mut app, key(KeyCode::Esc));
+    app.dispatch(Action::Next);
+
+    let renamed = music.join("A/rec1（改过名）.wav");
+    std::fs::rename(&tracks[0].path, &renamed).unwrap();
+    tracks[0].path = renamed.clone();
+    tracks[0].relative_path = PathBuf::from("A/rec1（改过名）.wav");
+    app.apply_scan_finished(tracks, Vec::new());
+    settle_search_and_selection(&mut app);
+    // 跟过去的跳转点马上写盘。
+    let file = temp.path().join("data/nemuri/marks.json");
+    assert!(std::fs::read_to_string(&file).unwrap().contains("改过名"));
+
+    app.play_path(&renamed, true, BagUpdate::Reanchor).unwrap();
+    assert_eq!(mark_positions(&app), [5 * MINUTE, 10 * MINUTE]);
+    assert_eq!(app.current_marks()[0].name.as_deref(), Some("开头"));
+}
+
+#[test]
+fn an_unreadable_marks_file_is_kept_aside_at_startup() {
+    let temp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(temp.path().join("music")).unwrap();
+    let file = temp.path().join("data/nemuri/marks.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, "not json").unwrap();
+
+    let app = app_in(temp.path(), "music", AppConfig::default());
+    let message = app.view.message.clone().unwrap();
+    assert!(message.starts_with("跳转点文件无法识别"), "{message}");
+    assert!(!file.exists());
+}
+
+#[test]
+fn a_failed_save_is_reported_and_retried_on_exit() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    // 目标位置被一个目录占着，写不进去。
+    let file = temp.path().join("data/nemuri/marks.json");
+    std::fs::create_dir_all(&file).unwrap();
+    marks_fixture(&mut app, &temp.path().join("music"), &[5], MINUTE);
+    let message = app.view.message.clone().unwrap();
+    assert!(message.starts_with("无法保存跳转点"), "{message}");
+    assert_eq!(mark_positions(&app), [5 * MINUTE]);
+    assert!(app.save_marks().is_err());
+
+    std::fs::remove_dir(&file).unwrap();
+    app.save_marks().unwrap();
+    assert!(std::fs::read_to_string(&file).unwrap().contains("300000"));
+}
