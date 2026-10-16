@@ -3431,7 +3431,7 @@ fn the_marks_panel_lists_times_names_and_the_current_section() {
     assert!(
         screen
             .iter()
-            .any(|row| row.contains("Enter跳到这里·e改名·d删除·Esc关闭"))
+            .any(|row| row.contains("Enter跳到这里·s/S起点/终点·e改名·d删除·Esc关闭"))
     );
 
     press(&mut app, key(KeyCode::Char('e')));
@@ -3616,10 +3616,7 @@ fn bounds_fixture(app: &mut App, music: &Path, at: Duration) -> Vec<PathBuf> {
 fn set_role(app: &mut App, row: usize, character: char) {
     press(app, key(KeyCode::Char('B')));
     app.dispatch(Action::SelectRow(row));
-    app.dispatch(Action::ToggleMarkRole(match character {
-        's' => Role::Start,
-        _ => Role::End,
-    }));
+    press(app, key(KeyCode::Char(character)));
     press(app, key(KeyCode::Esc));
 }
 
@@ -3972,4 +3969,60 @@ fn an_end_point_past_a_shortened_file_no_longer_stops_playback() {
     app.apply_scan_finished(tracks, Vec::new());
     assert_eq!(mark_positions(&app), [2 * MINUTE, 5 * MINUTE, 15 * MINUTE]);
     assert_eq!(control.stop_at(), None);
+}
+
+#[test]
+fn the_marks_panel_tags_the_start_and_end_points_and_keeps_the_whole_hint() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    bounds_fixture(&mut app, &temp.path().join("music"), 10 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    app.dispatch(Action::SelectRow(0));
+    press(&mut app, key(KeyCode::Char('e')));
+    type_text(&mut app, "正片开始之前的一大段说明和广告，名字长到放不下");
+    press(&mut app, key(KeyCode::Enter));
+
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend);
+    // 名字太长时截短名字，标签照样看得见。
+    assert!(
+        screen
+            .iter()
+            .any(|row| row.contains("▸2:00正片开始之前") && row.contains("…起点")),
+        "{screen:#?}"
+    );
+    assert!(
+        screen.iter().any(|row| row.contains("18:00终点")),
+        "{screen:#?}"
+    );
+    assert!(
+        screen.iter().any(|row| row.contains("●5:00│")),
+        "普通跳转点不加标签：{screen:#?}"
+    );
+    assert!(
+        screen
+            .iter()
+            .any(|row| row.contains("Enter跳到这里·s/S起点/终点·e改名·d删除·Esc关闭")),
+        "{screen:#?}"
+    );
+
+    // s 和 S 是面板里的键，不会漏到曲库去开关随机播放。
+    let shuffle = app.config.shuffle;
+    press(&mut app, key(KeyCode::Char('s')));
+    assert_eq!(app.config.shuffle, shuffle);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已取消起点，以后从 0:00 开始")
+    );
+}
+
+#[test]
+fn the_help_says_zero_goes_to_the_start_point_first() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.dispatch(Action::OpenOverlay(Overlay::Help));
+    let (_, backend) = render(&app, 80, 40);
+    assert!(
+        popup_text(&backend).contains("0–9跳到0%–90%位置（有起点时0先回到起点）"),
+        "{}",
+        popup_text(&backend)
+    );
 }

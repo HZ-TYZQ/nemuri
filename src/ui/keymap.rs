@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{Action, App, Overlay};
+use crate::marks::Role;
 
 use super::ViewLayout;
 
@@ -355,6 +356,14 @@ pub(super) const MARKS: &[Binding] = &[
         "Enter",
         "跳到这里",
         &[(code(KeyCode::Enter), Action::Activate)],
+    ),
+    listed(
+        "s/S",
+        "起点/终点",
+        &[
+            (ch('s'), Action::ToggleMarkRole(Role::Start)),
+            (ch('S'), Action::ToggleMarkRole(Role::End)),
+        ],
     ),
     listed("e", "改名", &[(ch('e'), Action::RenameMark)]),
     listed("d", "删除", &[(ch('d'), Action::RemoveMark)]),

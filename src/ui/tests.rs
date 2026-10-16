@@ -451,7 +451,7 @@ fn generated_hints_keep_the_overlay_wording() {
     assert_eq!(keymap::hints(NAME_INPUT), "Enter 创建 · Esc 取消");
     assert_eq!(
         keymap::hints(MARKS),
-        "Enter 跳到这里 · e 改名 · d 删除 · Esc 关闭"
+        "Enter 跳到这里 · s/S 起点/终点 · e 改名 · d 删除 · Esc 关闭"
     );
     assert_eq!(keymap::hints(MARK_NAME), "Enter 确定 · Esc 取消");
     assert_eq!(keymap::hints(DELETE_CONFIRM), "y 确认 · n/Esc 取消");

@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Overlay};
+use crate::marks::Role;
 use crate::theme::Theme;
 use crate::track::Track;
 
@@ -368,15 +369,16 @@ fn draw_folders(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView
     );
 }
 
-/// 当前曲目的跳转点，每行是右对齐的时间和名字，当前所在段用 ● 标出。
+/// 当前曲目的跳转点，每行是右对齐的时间和名字，当前所在段用 ● 标出，
+/// 起点和终点在名字后面用暗色注明。
 fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
     let marks = app.current_marks();
     if marks.is_empty() {
         view.clear();
         return;
     }
-    // 列表行、上下边框和提示行。
-    let area = centered(frame.area(), 60, (marks.len() as u16).saturating_add(3));
+    // 列表行、上下边框和提示行；64 列放得下整行提示。
+    let area = centered(frame.area(), 64, (marks.len() as u16).saturating_add(3));
     frame.render_widget(Clear, area);
     let prefix = " 跳转点 · ";
     let title_width = usize::from(area.width)
@@ -407,6 +409,14 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
     let items = marks.iter().enumerate().map(|(index, mark)| {
         let marker = if current == Some(index) { "● " } else { "  " };
         let time = format!("{:>time_width$}", fmt_duration(mark.position));
+        let tag = match mark.role {
+            Role::Plain => None,
+            Role::Start => Some("起点"),
+            Role::End => Some("终点"),
+        };
+        let name_width = name_width
+            .saturating_sub(tag.map_or(0, |tag| 2 + UnicodeWidthStr::width(tag)))
+            .max(1);
         let mut spans = vec![Span::styled(marker, Style::new().fg(theme.primary))];
         match &mark.name {
             Some(name) => spans.extend([
@@ -418,6 +428,12 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
                 ),
             ]),
             None => spans.push(Span::styled(time, Style::new().fg(theme.primary))),
+        }
+        if let Some(tag) = tag {
+            spans.extend([
+                Span::raw("  "),
+                Span::styled(tag, Style::new().fg(theme.muted)),
+            ]);
         }
         ListItem::new(Line::from(spans))
     });
