@@ -18,38 +18,51 @@ impl App {
         if self.playback.player.state() == PlayState::Stopped {
             return;
         }
-        let current = duration_as_micros(self.playback.player.position());
+        // 按显示时间算：往前退到开头为止，往后越过结尾就是下一首。
+        let current = duration_as_micros(self.shown_position());
         let requested = current.saturating_add(offset);
         if requested < 0 {
-            if self.playback.player.seek_to(Duration::ZERO) {
-                self.push_seeked(Duration::ZERO);
+            let start = self.file_time(Duration::ZERO);
+            if self.playback.player.seek_to(start) {
+                self.push_seeked(start);
             }
             return;
         }
-        if let Some(duration) = self.effective_duration()
-            && requested > duration_as_micros(duration)
-        {
-            // 往后跳过了结尾，当作这一条已经听完。
+        if self.beyond_end(Duration::from_micros(requested as u64)) {
+            // 往后跳过了结尾，当作这一条已经听完；播放列表的条目直接放下一条。
             self.mark_finished();
             self.play_next(false);
             return;
         }
-        let target = Duration::from_micros(requested as u64);
+        let target = self.file_time(Duration::from_micros(requested as u64));
         if self.playback.player.seek_to(target) {
             self.push_seeked(self.playback.player.position());
         }
     }
 
-    /// 按进度条比例跳转。没有时长就无从换算，直接忽略。
+    /// 按进度条比例跳转，比例按显示的总时长算。没有时长就无从换算，直接忽略。
+    /// 播放列表的条目点到最右端就是下一条。
     pub(super) fn seek_to_ratio(&mut self, ratio: f64) {
-        let Some(duration) = self.effective_duration() else {
+        let Some(duration) = self.shown_duration() else {
             return;
         };
-        let ratio = ratio.clamp(0.0, 1.0);
-        self.seek_to_requested(duration.mul_f64(ratio), None);
+        let target = duration.mul_f64(ratio.clamp(0.0, 1.0));
+        if self.beyond_end(target) {
+            if !self.output_blocks_playback() && self.playback.player.state() != PlayState::Stopped
+            {
+                self.play_next(false);
+            }
+            return;
+        }
+        self.seek_to_requested(self.file_time(target), None);
     }
 
-    /// 跳到绝对位置；跳成了返回 true。
+    /// 系统媒体控制的 SetPosition：位置是显示时间。
+    pub(super) fn seek_to_shown(&mut self, position: Duration, track_id: Option<&str>) -> bool {
+        self.seek_to_requested(self.file_time(position), track_id)
+    }
+
+    /// 跳到文件里的绝对位置；跳成了返回 true。
     pub(super) fn seek_to_requested(&mut self, position: Duration, track_id: Option<&str>) -> bool {
         if self.output_blocks_playback() {
             return false;
@@ -62,9 +75,7 @@ impl App {
         {
             return false;
         }
-        if let Some(duration) = self.effective_duration()
-            && position > duration
-        {
+        if self.beyond_end(self.shown(position)) {
             return false;
         }
         let moved = self.playback.player.seek_to(position);
@@ -74,14 +85,9 @@ impl App {
         moved
     }
 
-    pub(super) fn effective_duration(&self) -> Option<Duration> {
-        self.playback
-            .player
-            .duration()
-            .or_else(|| self.current_track().and_then(|track| track.duration))
-    }
-
+    /// 告诉系统媒体控制跳到了哪里；`position` 是文件时间，交出去的是显示时间。
     fn push_seeked(&mut self, position: Duration) {
+        let position = self.shown(position);
         self.playback
             .media_events
             .push(MediaEvent::Seeked { position });
@@ -111,18 +117,18 @@ impl App {
         MediaSnapshot {
             status: self.playback.player.state(),
             title: match (track, shown) {
-                (_, Some(track)) => track.display_title().to_owned(),
+                (_, Some(_)) => self.item_title().unwrap_or_default(),
                 (Some(_), None) => PRIVATE_TITLE.to_owned(),
                 (None, None) => String::new(),
             },
             artist: shown.and_then(|track| track.artist.clone()),
             album: shown.and_then(|track| track.album.clone()),
             path: shown.map(|track| track.path.clone()),
-            duration: self.effective_duration(),
-            position: self.playback.player.position(),
+            duration: self.shown_duration(),
+            position: self.shown_position(),
             volume: self.playback.player.volume(),
             muted: self.playback.player.is_muted(),
-            repeat: self.config.repeat,
+            repeat: self.playback_mode().repeat,
             shuffle: self.config.shuffle,
             can_go_previous: !self.playback.history.is_empty(),
             can_go_next: self.can_go_next(),
@@ -130,22 +136,16 @@ impl App {
         }
     }
 
+    /// 每装载一次换一个 ID：同一个文件的两个片段先后播放时，系统那边才知道换了曲目、刷新长度。
     fn current_track_id(&self) -> String {
         match self.playback.playing_index {
-            Some(index) => format!("/org/mpris/MediaPlayer2/Track/{index}"),
+            Some(_) => format!("/org/mpris/MediaPlayer2/Track/{}", self.playback.loads),
             None => "/org/mpris/MediaPlayer2/TrackList/NoTrack".to_owned(),
         }
     }
 
     fn can_go_next(&self) -> bool {
-        if !self.playback.queue.is_empty() {
-            return true;
-        }
-        self.playback.order.has_next(
-            self.catalog.scope(),
-            self.playback.playing_index,
-            self.playback_mode(),
-        )
+        !self.playback.queue.is_empty() || self.scope_has_next()
     }
 }
 

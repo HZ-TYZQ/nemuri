@@ -5,8 +5,12 @@ use std::time::Duration;
 
 use crate::config::AppConfig;
 use crate::player::{ChannelMix, MAX_BALANCE, PlayState};
-use crate::track::{PlaybackMode, RepeatMode};
+use crate::playlist::Saved;
+use crate::track::{RepeatMode, fmt_duration};
 
+use super::playlists::saved_message;
+use super::progress::Opening;
+use super::scope::{Cursor, Origin, Played, ScopeMark};
 use super::{App, BagUpdate};
 
 /// 一次切歌失败的可读原因。它不直接写进 `message`，
@@ -51,7 +55,7 @@ pub(super) fn channel_mix(config: &AppConfig) -> ChannelMix {
     }
 }
 
-fn file_label(path: &Path) -> String {
+pub(super) fn file_label(path: &Path) -> String {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
@@ -67,22 +71,38 @@ impl App {
         true
     }
 
+    /// 在曲库里播放选中的曲目，回到曲库范围。
     pub(super) fn play_selected(&mut self) {
         if self.output_blocks_playback() {
             return;
         }
-        if let Some(index) = self.selected_track_index()
-            && let Err(skip) = self.play_index(index, true, BagUpdate::Reanchor)
-        {
-            self.view.message = Some(skip.into_message());
+        let Some(index) = self.selected_track_index() else {
+            return;
+        };
+        match self.play_index(index, true, BagUpdate::Reanchor) {
+            Ok(()) => self.enter_library(),
+            Err(skip) => self.view.message = Some(skip.into_message()),
         }
     }
 
-    /// 切歌失败的原因不写进 `message`，而是交回调用方：
-    /// 直接播放要立刻报错，自动跳过则要等落到能播的曲目后再汇总。
+    /// 按曲库播放一首：用录音的起点、终点和收听进度。不改变播放范围。
     pub(super) fn play_index(
         &mut self,
         index: usize,
+        remember_current: bool,
+        bag: BagUpdate,
+    ) -> Result<(), Skip> {
+        self.play_item(index, Origin::Library, remember_current, bag)
+    }
+
+    /// 装载曲库里的第 `index` 首，按 `origin` 播放。`bag` 管曲库的随机袋。
+    ///
+    /// 切歌失败的原因不写进 `message`，而是交回调用方：
+    /// 直接播放要立刻报错，自动跳过则要等落到能播的曲目后再汇总。
+    pub(super) fn play_item(
+        &mut self,
+        index: usize,
+        origin: Origin,
         remember_current: bool,
         bag: BagUpdate,
     ) -> Result<(), Skip> {
@@ -90,16 +110,39 @@ impl App {
             return Err(Skip::new(format!("#{}", index + 1), "不在曲库中"));
         };
         let path = track.path.clone();
+        let title = match &origin {
+            Origin::Entry {
+                name: Some(name), ..
+            } => format!("{} · {name}", track.display_title()),
+            Origin::Entry { .. } | Origin::Library => track.display_title().to_owned(),
+        };
+        // 文件被剪短了，片段的开头已经在文件之外：不放，也不退回 0:00。
+        if let Origin::Entry { range, .. } = &origin
+            && track
+                .duration
+                .is_some_and(|duration| range.start >= duration)
+        {
+            return Err(Skip::new(
+                title,
+                format!("片段开头 {} 超出文件时长", fmt_duration(range.start)),
+            ));
+        }
         let previous = remember_current
-            .then(|| self.current_track().map(|track| track.path.clone()))
+            .then(|| self.current_played())
             .flatten()
-            .filter(|current| *current != path);
+            .filter(|current| current.path != path || current.origin != origin);
         // 先记下正在放的这一条停在哪里，再换；换的若是同一条，就接着放。
         self.note_progress();
         let autoplay = self.playback.player.state() != PlayState::Paused;
-        let opening = self.opening(index);
-        match self.load_track(&path, autoplay, opening.position()) {
+        // 列表里的条目不续播，也不用录音的起点，从条目自己的开头开始；
+        // 从开头装载不成时不退回 0:00，开头之前不是这一条的内容。
+        let (opening, exact) = match &origin {
+            Origin::Library => (self.opening(index), false),
+            Origin::Entry { range, .. } => (Opening::Clip(range.start), true),
+        };
+        match self.load_track(&path, autoplay, opening.position(), exact) {
             Ok(opened_at) => {
+                self.playback.loads += 1;
                 self.start_playthrough();
                 // 只有切歌成功后才改动历史与频谱状态；加载失败时旧曲仍是当前曲目。
                 if let Some(previous) = previous {
@@ -108,6 +151,7 @@ impl App {
                 // 保留已收敛的 sensitivity，重新进入 fast-adapt（见 spectrum.rs）。
                 self.playback.spectrum.on_track_change();
                 self.playback.playing_index = Some(index);
+                self.playback.origin = origin;
                 self.apply_stop();
                 // 从记下的位置或起点开不成时退回了 0:00，那就不用说明。
                 self.view.message = opened_at.and_then(|_| opening.message());
@@ -124,29 +168,41 @@ impl App {
                 }
                 Ok(())
             }
-            Err(error) => Err(Skip::new(
-                self.catalog.tracks()[index].display_title().to_owned(),
-                short_reason(&error, &path),
-            )),
+            Err(error) => Err(Skip::new(title, short_reason(&error, &path))),
         }
     }
 
+    /// 正在放的这一项在历史里的记法，连同现在的播放范围。
+    fn current_played(&self) -> Option<Played> {
+        Some(Played {
+            path: self.current_track()?.path.clone(),
+            origin: self.playback.origin.clone(),
+            scope: self.scope_mark(),
+        })
+    }
+
     /// 装载曲目：`start` 有值时从那里开始，播放中切歌时接着播放、暂停中只装载。
-    /// 从中间装载失败（例如文件被剪短）时退回从头装载。返回实际开始的位置，从头时为 None。
+    /// 从中间装载失败（例如文件被剪短）时退回从头装载；`exact` 时不退回，直接报错。
+    /// 返回实际开始的位置，从头时为 None。
     fn load_track(
         &mut self,
         path: &Path,
         autoplay: bool,
         start: Option<Duration>,
+        exact: bool,
     ) -> Result<Option<Duration>, String> {
         let player = &mut self.playback.player;
-        if let Some(position) = start
-            && player.open_at(path, position).is_ok()
-        {
-            if autoplay {
-                player.resume();
+        if let Some(position) = start {
+            match player.open_at(path, position) {
+                Ok(()) => {
+                    if autoplay {
+                        player.resume();
+                    }
+                    return Ok(Some(position));
+                }
+                Err(error) if exact => return Err(error),
+                Err(_) => {}
             }
-            return Ok(Some(position));
         }
         if autoplay {
             player.play(path)
@@ -184,9 +240,7 @@ impl App {
             return;
         }
         let max_attempts = self
-            .catalog
-            .scope()
-            .len()
+            .scope_len()
             .saturating_add(self.playback.queue.len())
             .max(1);
         let mut library_cursor = self
@@ -195,6 +249,7 @@ impl App {
             .or_else(|| self.selected_track_index());
         let mut natural_end = natural_end;
         for _ in 0..max_attempts {
+            // 队列里的是插播，按曲库播放，不改变播放范围。
             if let Some(path) = self.take_queue_head() {
                 match self.play_path(&path, true, BagUpdate::Leave) {
                     Ok(()) => {
@@ -205,34 +260,58 @@ impl App {
                 }
                 continue;
             }
-            let Some(next) = self.next_library_index_from(library_cursor, natural_end) else {
-                self.note_progress();
-                self.playback.player.stop();
-                self.playback.playing_index = None;
-                // 默认的循环方式会在每首播完时停下，说明原因，免得以为出了故障。
-                if natural_end && self.config.repeat == RepeatMode::Stop {
-                    self.view.message = Some("已播完，播放停止（按 z 切换循环方式）".to_owned());
+            let played = match self.in_playlist() {
+                Some(playlist) => {
+                    let Some(entry) = self.next_entry(natural_end) else {
+                        self.stop_at_scope_end(natural_end, &skipped);
+                        return;
+                    };
+                    let played = self.play_entry(playlist, entry, true);
+                    // 放不成也移过去，下一次接着往后试。
+                    self.move_cursor_to(entry);
+                    played
                 }
-                self.report_skipped(&skipped);
-                return;
+                None => {
+                    let Some(next) = self.next_library_index_from(library_cursor, natural_end)
+                    else {
+                        self.stop_at_scope_end(natural_end, &skipped);
+                        return;
+                    };
+                    // 加载失败不会改变 playing_index，因此用局部游标继续向后尝试。
+                    library_cursor = Some(next);
+                    self.play_index(next, true, BagUpdate::Leave)
+                }
             };
-            match self.play_index(next, true, BagUpdate::Leave) {
+            match played {
                 Ok(()) => {
                     self.report_skipped(&skipped);
                     return;
                 }
                 Err(skip) => skipped.push(skip),
             }
-            // 加载失败不会改变 playing_index，因此用局部游标继续向后尝试。
             // 单曲循环在自然结束后优先重载当前曲；若重载失败，
             // 后续尝试应按“播放错误”处理，不再锁定同一曲。
-            library_cursor = Some(next);
             natural_end = false;
         }
         self.note_progress();
         self.playback.player.stop();
         self.playback.playing_index = None;
         self.view.message = Some(no_playable_message("下一首", skipped.len()));
+    }
+
+    /// 当前范围放完了：停下并说明原因。
+    fn stop_at_scope_end(&mut self, natural_end: bool, skipped: &[Skip]) {
+        self.note_progress();
+        self.playback.player.stop();
+        self.playback.playing_index = None;
+        let repeat = self.playback_mode().repeat;
+        // 默认的循环方式会在每首播完时停下，说明原因，免得以为出了故障。
+        if natural_end && repeat == RepeatMode::Stop {
+            self.view.message = Some("已播完，播放停止（按 z 切换循环方式）".to_owned());
+        } else if let Some((name, _, _)) = self.scope_summary() {
+            self.view.message = Some(format!("播放列表“{name}”已播完"));
+        }
+        self.report_skipped(skipped);
     }
 
     /// 成功切歌后汇总这一轮跳过的曲目。没有跳过就不碰 `message`，
@@ -264,7 +343,7 @@ impl App {
         current: Option<usize>,
         natural_end: bool,
     ) -> Option<usize> {
-        let mode = self.playback_mode();
+        let mode = self.library_mode();
         self.playback
             .order
             .next(self.catalog.scope(), current, natural_end, mode)
@@ -282,8 +361,8 @@ impl App {
             return;
         }
         let mut skipped = Vec::new();
-        while let Some(path) = self.playback.history.pop() {
-            match self.play_path(&path, false, BagUpdate::Reanchor) {
+        while let Some(played) = self.playback.history.pop() {
+            match self.replay(played) {
                 Ok(()) => {
                     self.report_skipped(&skipped);
                     return;
@@ -296,6 +375,35 @@ impl App {
         } else {
             no_playable_message("上一首", skipped.len())
         });
+    }
+
+    /// 退回历史里的一项，连同放它时的播放范围。
+    fn replay(&mut self, played: Played) -> Result<(), Skip> {
+        match played.origin {
+            Origin::Entry {
+                playlist, entry, ..
+            } if self.entry_exists(playlist, entry) => {
+                self.play_entry(playlist, entry, false)?;
+                self.enter_playlist(playlist, Cursor::At(entry));
+                Ok(())
+            }
+            // 列表或这一条已经删掉：按当时的范围放一次，当作插播。
+            origin @ Origin::Entry { .. } => {
+                let index = self
+                    .index_for_path(&played.path)
+                    .ok_or_else(|| Skip::new(file_label(&played.path), "不在曲库中"))?;
+                self.play_item(index, origin, false, BagUpdate::Leave)
+            }
+            Origin::Library => {
+                let bag = match played.scope {
+                    ScopeMark::Library => BagUpdate::Reanchor,
+                    ScopeMark::Playlist { .. } => BagUpdate::Leave,
+                };
+                self.play_path(&played.path, false, bag)?;
+                self.restore_scope(played.scope);
+                Ok(())
+            }
+        }
     }
 
     pub(super) fn enqueue_selected(&mut self, next: bool) {
@@ -383,20 +491,54 @@ impl App {
         );
     }
 
-    /// 系统媒体控制只有“不循环”，分不出播完停止和顺序播放：
-    /// 已经是这两种之一时保持不变，从循环切过来时用播完停止。
+    /// 系统媒体控制改当前范围的循环方式。系统只有“不循环”，分不出播完停止和顺序播放：
+    /// 已经是这两种之一时保持不变；从循环切过来时用这个范围的默认值，
+    /// 曲库是播完停止，播放列表是顺序。
     pub(super) fn set_repeat(&mut self, repeat: RepeatMode) {
-        let looping = matches!(self.config.repeat, RepeatMode::All | RepeatMode::One);
-        self.config.repeat = match repeat {
-            RepeatMode::Stop | RepeatMode::None if !looping => self.config.repeat,
-            RepeatMode::Stop | RepeatMode::None => RepeatMode::Stop,
+        let current = self.playback_mode().repeat;
+        let looping = matches!(current, RepeatMode::All | RepeatMode::One);
+        let not_looping = match self.in_playlist() {
+            Some(_) => RepeatMode::None,
+            None => RepeatMode::Stop,
+        };
+        let repeat = match repeat {
+            RepeatMode::Stop | RepeatMode::None if !looping => current,
+            RepeatMode::Stop | RepeatMode::None => not_looping,
             looping @ (RepeatMode::All | RepeatMode::One) => looping,
         };
+        if repeat == current {
+            return;
+        }
+        // 切换本身在系统那边看得到，只在列表没能写盘时说明。
+        if let Some((name, saved @ Saved::No(_))) = self.apply_repeat(repeat) {
+            self.view.message = Some(saved_message(
+                format!("列表“{name}”循环：{}", repeat.label()),
+                saved,
+            ));
+        }
     }
 
+    /// `z`：切换当前范围的循环方式。列表范围里切的是这个列表的，改了就写盘；配置里曲库的不变。
     pub(super) fn cycle_repeat(&mut self) {
-        self.config.repeat = self.config.repeat.next();
-        self.view.message = Some(format!("循环：{}", self.config.repeat.label()));
+        let repeat = self.playback_mode().repeat.next();
+        let message = match self.apply_repeat(repeat) {
+            Some((name, saved)) => {
+                saved_message(format!("列表“{name}”循环：{}", repeat.label()), saved)
+            }
+            None => format!("循环：{}", repeat.label()),
+        };
+        self.view.message = Some(message);
+    }
+
+    /// 把循环方式设到当前范围上。列表范围交回列表名和写盘的结果，曲库范围为 None。
+    fn apply_repeat(&mut self, repeat: RepeatMode) -> Option<(String, Saved)> {
+        let Some(id) = self.in_playlist() else {
+            self.config.repeat = repeat;
+            return None;
+        };
+        let saved = self.playlists.set_repeat(id, repeat).ok()?;
+        let name = self.playlists.get(id)?.name.clone();
+        Some((name, saved))
     }
 
     pub(super) fn toggle_shuffle(&mut self) {
@@ -414,6 +556,7 @@ impl App {
             self.playback.order.clear();
             self.view.message = Some("已关闭随机播放".to_owned());
         }
+        self.reanchor_playlist_bag();
     }
 
     pub(super) fn toggle_or_start(&mut self) {
@@ -433,22 +576,25 @@ impl App {
             PlayState::Playing => {}
             PlayState::Paused => self.playback.player.resume(),
             PlayState::Stopped => {
-                if let Some(index) = self
+                // 列表范围里从当前条目放；列表播完停下时就是最后一条。
+                if let Some((playlist, entry)) = self.entry_to_resume() {
+                    if let Err(skip) = self.play_entry(playlist, entry, false) {
+                        self.view.message = Some(skip.into_message());
+                    }
+                    return;
+                }
+                let Some(index) = self
                     .playback
                     .playing_index
                     .or_else(|| self.selected_track_index())
-                    && let Err(skip) = self.play_index(index, false, BagUpdate::Reanchor)
-                {
-                    self.view.message = Some(skip.into_message());
+                else {
+                    return;
+                };
+                match self.play_index(index, false, BagUpdate::Reanchor) {
+                    Ok(()) => self.enter_library(),
+                    Err(skip) => self.view.message = Some(skip.into_message()),
                 }
             }
-        }
-    }
-
-    pub fn playback_mode(&self) -> PlaybackMode {
-        PlaybackMode {
-            repeat: self.config.repeat,
-            shuffle: self.config.shuffle,
         }
     }
 

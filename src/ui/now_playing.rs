@@ -1,7 +1,5 @@
 //! 当前播放状态、模式与进度条。
 
-use std::time::Duration;
-
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Paragraph};
 use unicode_width::UnicodeWidthStr;
@@ -16,21 +14,8 @@ use super::text::{
     ascii_progress_bar, fmt_duration, mark_ticks, now_playing_text, truncate_display,
 };
 
-/// 解码器报告的总时长优先，其次是扫描时读到的时长。
-fn current_duration(app: &App) -> Option<Duration> {
-    app.player()
-        .duration()
-        .or_else(|| app.current_track()?.duration)
-}
-
-/// 当前曲目的播放进度，0.0–1.0；不知道总时长时为 0。
-pub(super) fn progress_ratio(app: &App) -> f64 {
-    current_duration(app)
-        .filter(|duration| !duration.is_zero())
-        .map(|duration| app.player().position().as_secs_f64() / duration.as_secs_f64())
-        .unwrap_or_default()
-        .clamp(0.0, 1.0)
-}
+/// 状态栏里的播放列表名最多占这么宽，免得把音量和队列挤出去。
+const SCOPE_NAME_WIDTH: usize = 12;
 
 /// 边框标题。当前所在段有名字时接在后面：放在标题里不和右边的状态栏抢宽度，
 /// 名字太长时截断。
@@ -96,8 +81,19 @@ pub(super) fn draw_now_playing(
     if app.config().swap_channels {
         channels.push_str(" · 左右互换");
     }
+    // 列表范围里写明在放哪个列表的第几条，后面的循环方式就是这个列表的。
+    let scope = match app.scope_summary() {
+        Some((name, number, count)) => {
+            let name = truncate_display(name, SCOPE_NAME_WIDTH);
+            match number {
+                Some(number) => format!("{name} {number}/{count} · "),
+                None => format!("{name} · "),
+            }
+        }
+        None => String::new(),
+    };
     let status = format!(
-        "{sleep}{privacy}{} · {volume}{channels} · 队列 {}",
+        "{sleep}{privacy}{scope}{} · {volume}{channels} · 队列 {}",
         app.playback_mode().label(),
         app.playback().queue.len()
     );
@@ -117,7 +113,8 @@ pub(super) fn draw_now_playing(
                 (None, Folder::Named(name)) => Some(name.as_str()),
                 (None, Folder::Root) => None,
             };
-            let (title, artist) = now_playing_text(track.display_title(), byline, budget);
+            let title = app.item_title().unwrap_or_default();
+            let (title, artist) = now_playing_text(&title, byline, budget);
             Line::from(vec![
                 Span::styled(icon, style),
                 Span::styled(title, Style::new().fg(theme.primary).bold()),
@@ -135,9 +132,9 @@ pub(super) fn draw_now_playing(
         top[1],
     );
 
-    let position = app.player().position();
-    let duration = current_duration(app);
-    let ratio = progress_ratio(app);
+    let position = app.shown_position();
+    let duration = app.shown_duration();
+    let ratio = app.shown_ratio();
     let position_label = fmt_duration(position);
     let duration_label = duration.map(fmt_duration).unwrap_or_else(|| "--:--".into());
     let bar_width =
@@ -148,7 +145,7 @@ pub(super) fn draw_now_playing(
             &bar,
             app.current_marks()
                 .iter()
-                .map(|mark| mark.position.as_secs_f64() / duration.as_secs_f64()),
+                .map(|mark| app.shown(mark.position).as_secs_f64() / duration.as_secs_f64()),
         ),
         None => bar,
     };

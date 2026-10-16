@@ -1,7 +1,8 @@
 # 已知问题
 
 最近审查日期：2026-10-16，基于提交 `b01ad0fa15387041d6693ea4d7cbefa46d7f2de0`。
-本轮新增 BUG-007 至 BUG-010，均为 P2；BUG-007 已于 2026-10-16 修复，其余三个待修复。
+本轮新增 BUG-007 至 BUG-010，均为 P2；BUG-007、BUG-008 已于 2026-10-16 修复，BUG-010 已于 2026-10-17
+修复，BUG-009 待修复。
 四个问题均已在 `dev-fedora` 容器内的临时源码副本中通过独立测试复现，详见文末。
 
 审查日期：2026-10-14。审查基于提交 `c691eb7feb17c2ea0222aa5d03250fb0dba0fb15`。
@@ -411,7 +412,13 @@ UTF-16 JSON，加载、添加新点、保存后检查原始字节是否存在于
 ### BUG-010：播放列表写盘失败后保留内存修改，导致重试无法保存
 
 - 优先级：P2。
-- 状态：待修复。
+- 状态：已修复，提交 `dae0788`（随播放列表 v2 一起改）。没有采用“写成了才改内存”，
+  而是和跳转点一样：改动先改内存再写盘，写不了时这个列表记为没存上，之后改动任何列表、
+  以及退出时（`App::save_playlists`）连同它一起再写，提示里写明“已改动，但没能保存……之后改动或退出时再试”。
+  v2 允许同一个文件出现多次，“已经在该播放列表中”的检查也没有了，重试不会再被挡住。
+  回归测试：`src/playlist.rs` 的 `a_change_that_could_not_be_saved_is_kept_and_saved_with_the_next_one`
+  （添加和移除都写盘失败，下一次改动和退出时写成，重新读取后和内存一致），
+  `src/app/tests.rs` 的 `a_playlist_change_that_cannot_be_saved_is_kept_and_saved_on_exit`。
 - 相关代码：[src/playlist.rs](../src/playlist.rs) 的 `add_track()`，第 109 行，
   以及 `remove_track()`，第 126 行。
 

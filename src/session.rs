@@ -19,13 +19,24 @@ pub struct Session {
     pub library_dir: PathBuf,
     /// 退出时装载着的曲目；没有时只恢复文件夹筛选。
     pub track: Option<PathBuf>,
+    /// 文件里的位置。放的是播放列表里的片段时也用文件时间，旧版本读到时照样恢复到同一个地方。
     pub position: Duration,
+    /// 退出时放的是播放列表里的哪一条；曲库播放时为 None。
+    pub entry: Option<ListEntry>,
     /// 退出时的文件夹筛选；None 表示显示全部。
     pub folder: Option<Folder>,
 }
 
-/// 没有曲目或筛选的字段直接省略。旧版本保存的文件没有 `folder`，照样能读；
-/// 旧版本读到只有文件夹、没有曲目的文件时当作没有会话。
+/// 播放列表里的一条：列表名和第几条（从 1 数）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListEntry {
+    pub playlist: String,
+    pub number: usize,
+}
+
+/// 没有曲目、列表条目或筛选的字段直接省略。旧版本保存的文件没有 `folder`、`playlist`
+/// 和 `entry`，照样能读；旧版本读到这几个字段时忽略它们，只恢复曲目和位置；
+/// 读到只有文件夹、没有曲目的文件时当作没有会话。
 #[derive(Serialize, Deserialize)]
 struct RawSession {
     version: u32,
@@ -34,6 +45,10 @@ struct RawSession {
     track: Option<PathBuf>,
     #[serde(default)]
     position_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    playlist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry: Option<usize>,
     // TOML 里表要排在普通值后面，所以文件夹放在最后。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folder: Option<RawFolder>,
@@ -54,6 +69,10 @@ impl Session {
             library_dir: raw.library_dir,
             track: raw.track,
             position: Duration::from_millis(raw.position_ms),
+            entry: raw
+                .playlist
+                .zip(raw.entry)
+                .map(|(playlist, number)| ListEntry { playlist, number }),
             folder: raw.folder.map(|folder| match folder {
                 RawFolder::Root => Folder::Root,
                 RawFolder::Named(name) => Folder::Named(name),
@@ -67,6 +86,8 @@ impl Session {
             library_dir: self.library_dir.clone(),
             track: self.track.clone(),
             position_ms: u64::try_from(self.position.as_millis()).unwrap_or(u64::MAX),
+            playlist: self.entry.as_ref().map(|entry| entry.playlist.clone()),
+            entry: self.entry.as_ref().map(|entry| entry.number),
             folder: self.folder.as_ref().map(|folder| match folder {
                 Folder::Root => RawFolder::Root,
                 Folder::Named(name) => RawFolder::Named(name.clone()),
@@ -98,10 +119,30 @@ mod tests {
             library_dir: PathBuf::from("/music"),
             track: Some(PathBuf::from("/music/测试 歌曲.flac")),
             position: Duration::from_millis(83_250),
+            entry: None,
             folder: Some(Folder::Named("ASMR(衣鶴)".to_owned())),
         };
         session.save(&path).unwrap();
         assert_eq!(Session::load(&path), Some(session));
+
+        // 播放列表里的一条：列表名和第几条排在文件夹之前。
+        let session = Session {
+            library_dir: PathBuf::from("/music"),
+            track: Some(PathBuf::from("/music/A.m4a")),
+            position: Duration::from_millis(812_000),
+            entry: Some(ListEntry {
+                playlist: "睡前".to_owned(),
+                number: 3,
+            }),
+            folder: Some(Folder::Root),
+        };
+        session.save(&path).unwrap();
+        assert_eq!(Session::load(&path), Some(session));
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains("playlist = \"睡前\"\nentry = 3\n"),
+            "{saved}"
+        );
 
         // 只有文件夹筛选、没有曲目也能保存；根目录也是一种筛选。
         for folder in [Folder::Root, Folder::Named("Music".to_owned())] {
@@ -109,6 +150,7 @@ mod tests {
                 library_dir: PathBuf::from("/music"),
                 track: None,
                 position: Duration::ZERO,
+                entry: None,
                 folder: Some(folder),
             };
             session.save(&path).unwrap();
@@ -135,6 +177,7 @@ mod tests {
                 library_dir: PathBuf::from("/m"),
                 track: Some(PathBuf::from("/m/a.wav")),
                 position: Duration::from_millis(1500),
+                entry: None,
                 folder: None,
             })
         );

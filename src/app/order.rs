@@ -94,6 +94,11 @@ impl PlaybackOrder {
         self.cursor = usize::from(anchor.is_some());
     }
 
+    /// 另起一个播放顺序，随机数源从这里分出去：播放列表的范围用它，和曲库的随机袋互不影响。
+    pub(crate) fn split(&mut self) -> Self {
+        Self::new(self.next_random())
+    }
+
     pub(crate) fn clear(&mut self) {
         self.bag.clear();
         self.cursor = 0;
@@ -162,10 +167,14 @@ impl PlaybackOrder {
     }
 
     fn random_index(&mut self, upper: usize) -> usize {
+        (self.next_random() as usize) % upper
+    }
+
+    fn next_random(&mut self) -> u64 {
         self.rng_state ^= self.rng_state << 13;
         self.rng_state ^= self.rng_state >> 7;
         self.rng_state ^= self.rng_state << 17;
-        (self.rng_state as usize) % upper
+        self.rng_state
     }
 }
 

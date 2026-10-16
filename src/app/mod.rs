@@ -11,11 +11,13 @@ mod playback;
 mod playlists;
 mod progress;
 mod queue;
+mod scope;
 mod selection;
 mod session;
 mod sleep;
 mod sorting;
 mod state;
+mod timeline;
 
 #[cfg(test)]
 mod tests;
@@ -36,6 +38,7 @@ pub use action::Action;
 pub use catalog::Catalog;
 use marks::Marks;
 use playback::Skip;
+pub use playlists::{Bound, BoundChoice, NewClip};
 use progress::Progress;
 use sleep::SleepTimer;
 pub use state::{Playback, ViewState};
@@ -55,6 +58,12 @@ pub enum Overlay {
     Marks,
     /// 给面板里选中的跳转点改名。
     MarkName,
+    /// 把跳转点面板里选中的一段加到哪个播放列表。
+    PickPlaylist,
+    /// 给列表条目挑开头或结尾。
+    EntryBound,
+    /// 给列表条目改名。
+    EntryName,
 }
 
 /// 曲库变动前记下的曲目，变动后按路径找回它们的新下标。
@@ -382,6 +391,7 @@ impl App {
         self.replace_tracks(tracks);
         self.follow_renamed_progress();
         self.follow_renamed_marks();
+        let playlist_note = self.follow_renamed_playlists();
         // 重扫往往是因为刚放进了 .lrc 文件，下一个 tick 重新读取歌词。
         self.playback.lyrics = None;
         self.scan_progress = None;
@@ -399,11 +409,11 @@ impl App {
         if let Some(note) = startup_note {
             self.view.message = Some(note);
         }
-        // 放在恢复会话之后，这条说明才不会被恢复提示覆盖。
-        if let Some(folder) = filtered
-            && self.catalog.folder().is_none()
-        {
-            let note = format!("文件夹“{}”已不存在，改为显示全部", folder.label());
+        // 放在恢复会话之后，这两条说明才不会被恢复提示覆盖。
+        let folder_note = filtered
+            .filter(|_| self.catalog.folder().is_none())
+            .map(|folder| format!("文件夹“{}”已不存在，改为显示全部", folder.label()));
+        for note in [folder_note, playlist_note].into_iter().flatten() {
             self.view.message = Some(match self.view.message.take() {
                 Some(message) => format!("{message}；{note}"),
                 None => note,
