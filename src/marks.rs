@@ -826,6 +826,22 @@ mod tests {
         assert_eq!(positions(&store, &renamed), [5 * MINUTE]);
     }
 
+    #[test]
+    fn marks_of_two_lost_files_are_not_guessed_onto_one_renamed_file() {
+        // 两个文件大小和修改时间相同，一个改了名、一个移出了音乐库。
+        let mut store = MarkStore::default();
+        let first = recording("/lib/甲.flac");
+        let second = recording("/lib/乙.flac");
+        store.add(&first, 5 * MINUTE).unwrap();
+        store.add(&second, 9 * MINUTE).unwrap();
+
+        let renamed = recording("/lib/新名字.flac");
+        assert!(!store.follow_renames(std::slice::from_ref(&renamed), Path::new("/lib")));
+        assert!(store.marks(&renamed.path).is_empty());
+        assert_eq!(positions(&store, &first), [5 * MINUTE]);
+        assert_eq!(positions(&store, &second), [9 * MINUTE]);
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_path_that_cannot_be_saved_is_refused() {

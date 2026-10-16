@@ -81,44 +81,44 @@ impl<T: Clone + PartialEq> FileRecords<T> {
 
     /// 文件改名后把记录跟过去：改名不改变文件大小和修改时间。
     ///
-    /// 只处理音乐库目录下、已经找不到的记录，而且只在新曲库里恰好有一首
-    /// 大小和修改时间都相同、自己还没有记录的曲目时才搬。对不上或有多个候选时不动，
-    /// 找不到的记录也保留（比如移动硬盘暂时没挂上）。有搬动时返回 true。
+    /// 只处理音乐库目录下、已经找不到的记录（失联记录）。大小和修改时间相同的失联记录
+    /// 只有一条，新曲库里自己还没有记录的曲目也只有一首时，才把这条记录搬过去。
+    /// 两边任何一边有多个时都不动：多条失联记录对上同一首曲目，不知道改名的是哪一个；
+    /// 一条对上多首，不知道改成了哪一个。猜错会把别的录音的进度和跳转点安到这一首上。
+    /// 对不上的记录也保留（比如移动硬盘暂时没挂上）。有搬动时返回 true。
     pub(crate) fn follow_renames(&mut self, tracks: &[Track], library_dir: &Path) -> bool {
         let present: HashSet<&Path> = tracks.iter().map(|track| track.path.as_path()).collect();
-        let mut candidates: HashMap<(u64, i64), Vec<&Track>> = HashMap::new();
+        let mut targets: HashMap<(u64, i64), Vec<&Track>> = HashMap::new();
         for track in tracks {
             if !self.entries.contains_key(&track.path) {
-                candidates
+                targets
                     .entry((track.file_size, track.modified_ns))
                     .or_default()
                     .push(track);
             }
         }
-        let orphans: Vec<PathBuf> = self
-            .entries
-            .keys()
-            .filter(|path| path.starts_with(library_dir) && !present.contains(path.as_path()))
-            .cloned()
-            .collect();
+        let mut orphans: HashMap<(u64, i64), Vec<PathBuf>> = HashMap::new();
+        for (path, entry) in &self.entries {
+            if path.starts_with(library_dir) && !present.contains(path.as_path()) {
+                orphans
+                    .entry((entry.file_size, entry.modified_ns))
+                    .or_default()
+                    .push(path.clone());
+            }
+        }
         let mut moved = false;
-        for orphan in orphans {
-            let entry = &self.entries[&orphan];
-            let Some([target]) = candidates
-                .get(&(entry.file_size, entry.modified_ns))
-                .map(Vec::as_slice)
+        for (stamp, sources) in orphans {
+            let ([source], Some([target])) =
+                (sources.as_slice(), targets.get(&stamp).map(Vec::as_slice))
             else {
                 continue;
             };
-            let target = target.path.clone();
-            if self.entries.contains_key(&target) {
-                continue;
-            }
+            // 目标自己没有记录，也只有这一组失联记录对得上它，不会覆盖别的记录。
             let entry = self
                 .entries
-                .remove(&orphan)
+                .remove(source)
                 .expect("orphan comes from entries");
-            self.entries.insert(target, entry);
+            self.entries.insert(target.path.clone(), entry);
             moved = true;
         }
         moved
@@ -249,6 +249,73 @@ pub(crate) mod tests {
 
     fn load(path: &Path) -> Loaded<Raw> {
         load_json(path, "测试记录", |raw: &Raw| raw.version == 1)
+    }
+
+    fn file(path: &str, size: u64) -> Track {
+        Track {
+            path: PathBuf::from(path),
+            relative_path: PathBuf::from(path),
+            title: "x".to_owned(),
+            artist: None,
+            album: None,
+            duration: None,
+            format: None,
+            track_number: None,
+            disc_number: None,
+            file_size: size,
+            modified_ns: 1,
+        }
+    }
+
+    /// 给每个文件记下一个值，值就是它在 `files` 里的位置。
+    fn records(files: &[Track]) -> FileRecords<usize> {
+        let mut records = FileRecords::default();
+        for (index, file) in files.iter().enumerate() {
+            records.set(file, Some(index));
+        }
+        records
+    }
+
+    #[test]
+    fn a_record_moves_when_one_lost_record_matches_one_new_file() {
+        let old = [file("/lib/甲.flac", 100), file("/lib/乙.flac", 200)];
+        let mut records = records(&old);
+        // 两个文件各自改名：大小不同，两边都唯一，各搬各的。
+        let renamed = [
+            file("/lib/甲（备注）.flac", 100),
+            file("/lib/乙（备注）.flac", 200),
+        ];
+        assert!(records.follow_renames(&renamed, Path::new("/lib")));
+        assert_eq!(records.get(&renamed[0].path), Some(&0));
+        assert_eq!(records.get(&renamed[1].path), Some(&1));
+        assert!(records.get(&old[0].path).is_none());
+        assert!(!records.follow_renames(&renamed, Path::new("/lib")));
+    }
+
+    #[test]
+    fn several_lost_records_matching_one_new_file_are_all_left_alone() {
+        // 两条记录的文件大小和修改时间相同（硬链接、保留修改时间的副本）。
+        // 一个改了名，另一个移出了音乐库：不知道新文件是哪一个，两条都不动。
+        // HashMap 的遍历顺序每次不同，多试几次，以前每次随便搬走其中一条。
+        let old = [file("/lib/甲.flac", 100), file("/lib/乙.flac", 100)];
+        let renamed = [file("/lib/新名字.flac", 100)];
+        for _ in 0..20 {
+            let mut records = records(&old);
+            assert!(!records.follow_renames(&renamed, Path::new("/lib")));
+            assert_eq!(records.get(&old[0].path), Some(&0));
+            assert_eq!(records.get(&old[1].path), Some(&1));
+            assert!(records.get(&renamed[0].path).is_none());
+        }
+    }
+
+    #[test]
+    fn one_lost_record_matching_several_new_files_is_left_alone() {
+        let old = [file("/lib/旧.flac", 100)];
+        let mut records = records(&old);
+        let twins = [file("/lib/甲.flac", 100), file("/lib/乙.flac", 100)];
+        assert!(!records.follow_renames(&twins, Path::new("/lib")));
+        assert_eq!(records.get(&old[0].path), Some(&0));
+        assert!(twins.iter().all(|twin| records.get(&twin.path).is_none()));
     }
 
     #[test]

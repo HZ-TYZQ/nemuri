@@ -361,6 +361,17 @@ mod tests {
             store_with_target.get(&target.path),
             Some(Listened::InProgress(5 * MINUTE))
         );
+        // 两条失联记录对上同一个新文件：不知道是哪一个改了名，两条都不动。
+        let mut lost_twins = ProgressStore::default();
+        let (first, second) = (file("/lib/甲.flac", 100, 1), file("/lib/乙.flac", 100, 1));
+        lost_twins.record(&first, 5 * MINUTE, Duration::ZERO, 30 * MINUTE);
+        lost_twins.finish(&second);
+        assert!(!lost_twins.follow_renames(&[file("/lib/新.flac", 100, 1)], Path::new("/lib")));
+        assert_eq!(
+            lost_twins.get(&first.path),
+            Some(Listened::InProgress(5 * MINUTE))
+        );
+        assert_eq!(lost_twins.get(&second.path), Some(Listened::Finished));
         // 不在这个音乐库里的记录（比如另一个库或没挂上的硬盘）不动。
         let mut elsewhere = ProgressStore::default();
         let outside = file("/other/旧.flac", 100, 1);
