@@ -67,6 +67,9 @@ current section's mark has a name, the now playing border shows it.
 .TP
 .B B
 Open the jump marks of the playing recording: Enter jumps to the selected mark,
+a adds the section from it to the next mark (or to the end of the file) to a
+playlist chosen next (see
+.BR PLAYLISTS ),
 s or S makes it the recording's start or end point (pressing it again clears
 it), e renames it (an empty name leaves only its time), d deletes it, and Esc or
 B closes the panel.
@@ -137,13 +140,15 @@ what is playing; playback can still be controlled from them. The now playing
 bar marks the mode. Off by default; the choice is restored on the next launch.
 .TP
 .BR n , p
-Play the next track or return through actual playback history.
+Play the next track or return through actual playback history. Returning to a
+playlist entry also returns to that playlist.
 .TP
 .B z
 Cycle repeat among stop-after-track, sequential, repeat-all, and repeat-one.
 Stop-after-track, the default, stops when a track ends on its own; n still
 moves on by hand and queued tracks still play. Media controls report it as no
-loop.
+loop. While playing from a playlist, z cycles that playlist's own repeat mode
+instead, and the library's setting is left alone.
 .TP
 .B s
 Toggle shuffle. When enabled, the library is played as a reshuffled permutation each round.
@@ -154,7 +159,8 @@ of the current recording. The countdown is shown first in the now playing bar.
 A minute timer runs on wall-clock time, also while paused; over its last 30
 seconds the output fades out, then playback pauses and keeps its position. The
 end-of-recording timer fades out the last 30 seconds of whatever is playing and
-stops when it ends, or at its end point unless that was skipped, regardless of
+stops when it ends, at its end point unless that was skipped, or at the end of
+a playlist clip, regardless of
 the repeat mode and the queue. The fade never
 changes the volume setting; pressing t again restarts the countdown and restores
 full volume. The fade length is set in the
@@ -193,7 +199,8 @@ entries before it, d removes one entry, J and K move the selected entry, and c
 clears the queue.
 .TP
 .B P
-Open the named playlist panel.
+Open the named playlist panel; see
+.BR PLAYLISTS .
 .TP
 .B ?
 Open the complete in-application help. On short terminals it scrolls with the
@@ -201,6 +208,41 @@ arrow keys, j and k, or the mouse wheel.
 .TP
 .B q
 Quit.
+.SH PLAYLISTS
+A playlist entry is either a whole track or a clip: a section of a long
+recording, taken from its jump marks. The same file may appear more than once.
+.PP
+In the playlist panel, c creates a playlist, a appends the track selected in
+the library as a whole entry, Enter opens the selected playlist, and x deletes
+it after confirmation; the music files are never touched. To add a clip, open
+the jump marks of the playing recording with
+.BR B ,
+select a mark, and press a: the section runs to the next mark, or to the end of
+the file after the last one, and is named after the mark. Then pick the
+playlist, or press c to create one. The times are copied into the playlist, so
+later changes to the marks do not affect it.
+.PP
+Enter on an entry plays the playlist from there. Next, natural ends, repeat, and
+shuffle then stay inside the playlist, and the now playing bar shows the
+playlist and the entry number. Each playlist keeps its own repeat mode, which z
+cycles while playing from it; new playlists play through once and stop.
+Shuffle is shared with the library. Queued tracks still play in between and
+hand back to the playlist. Playing a track from the library returns to the
+library, and p back to a playlist entry returns to its playlist.
+.PP
+A clip opens at its start and ends at its end, then the next entry plays.
+Seeking past its end moves on to the next entry, and seeking back stops at its
+start. The progress bar, times, the digit keys, and the system media controls
+use the time within the clip, and only the jump marks inside the clip are
+shown. Playlist entries, whole ones included, ignore the recording's start and
+end points and leave listening progress alone, so s and S in the jump mark
+panel are disabled while one plays.
+.PP
+Inside a playlist, J and K move the selected entry, e names it (an empty name
+clears it), d removes it, and s or S picks its start or end from the file's
+jump marks, the start of the file, or the end of the file. The playing playlist
+may be edited too: a removed playing entry finishes and is followed by the one
+after it, and deleting the playlist returns playback to the library.
 .SH CONFIGURATION
 Settings live in
 .IR config.kdl ,
@@ -274,15 +316,27 @@ Library, playback, sort, interface, and theme settings; see
 .BR CONFIGURATION .
 .TP
 .I $XDG_DATA_HOME/nemuri/playlists/*.json
-Independent named playlist files.
+Independent named playlist files with their entries, clip ranges, and repeat
+modes, written as soon as they change; a change that cannot be written is kept
+and written again with the next change and on exit. Entries follow a renamed
+file after the next scan. A clip that starts past the end of a shortened file
+is skipped, and one that ends past it plays to the end of the file. Version 1
+files from 2.0.0 and earlier are read as whole entries and rewritten in the
+current format on their first change, after which those versions can no longer
+read them. A file that cannot be parsed is renamed aside; one that cannot be
+read or comes from a newer version is left as it is, and a new playlist of the
+same name is refused rather than overwriting it.
 .TP
 .I $XDG_DATA_HOME/nemuri/session.toml
-Track, position, and folder filter at the last exit. On the next launch with
-the same library, the folder filter is restored and that track is loaded paused
-at the saved position; press Space to continue. A position within 3 seconds of
+Track, position, and folder filter at the last exit, and the playlist and entry
+number when playing from a playlist. On the next launch with the same library,
+the folder filter is restored and that track is loaded paused at the saved
+position, back in its playlist if that entry still exists; press Space to
+continue. A position within 3 seconds of
 the end, or of the end point or past it, goes back to the start point, or to
-0:00 without one. Deleting the file only forgets
-these.
+0:00 without one; in a playlist clip, a position outside the clip or within 3
+seconds of its end goes back to the start of the clip. Deleting the file only
+forgets these.
 .TP
 .I $XDG_DATA_HOME/nemuri/progress.json
 Listening progress of recordings of 10 minutes or more. Starting such a
