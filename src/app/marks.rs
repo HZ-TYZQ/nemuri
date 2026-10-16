@@ -103,6 +103,10 @@ impl App {
             Err(AddError::UnsupportedPath) => {
                 self.view.message = Some("文件路径含有无法保存的字符，不能设跳转点".to_owned());
             }
+            Err(AddError::ReadOnly) => {
+                self.view.message =
+                    Some("启动时跳转点文件没能读取或保留，本次运行不能添加跳转点".to_owned());
+            }
         }
     }
 

@@ -34,6 +34,8 @@ pub enum AddError {
     TooClose(Duration),
     /// 路径不是 UTF-8，存不进 JSON。
     UnsupportedPath,
+    /// 启动时跳转点文件读不了或没能改名保留，这次运行不能改动跳转点。
+    ReadOnly,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,18 +63,27 @@ struct RawMark {
 pub struct MarkStore {
     /// 每个录音的跳转点按位置排序，且不为空：删光时整条记录删掉。
     entries: FileRecords<Vec<Mark>>,
+    /// 启动时原文件读不了或没能改名保留：这次运行不写盘，免得空记录覆盖它。
+    /// 这时记录是空的，也不让添加，免得加了却存不下来。
+    read_only: bool,
 }
 
 impl MarkStore {
-    /// 读取跳转点文件；还没有时是空记录。读不了或格式不对时把文件改名保留，
-    /// 返回空记录和一句说明。
+    /// 读取跳转点文件；还没有时是空记录。用不了时返回空记录和一句说明，
+    /// 规则见 [`file_records::load_json`]。
     pub fn load(path: &Path) -> (Self, Option<String>) {
-        let (raw, message) =
+        let loaded =
             file_records::load_json(path, WHAT, |raw: &RawStore| raw.version == MARKS_VERSION);
-        (raw.map(Self::from_raw).unwrap_or_default(), message)
+        let mut store = loaded.raw.map(Self::from_raw).unwrap_or_default();
+        store.read_only = loaded.read_only;
+        (store, loaded.message)
     }
 
+    /// 写盘；启动时原文件读不了或没能保留时什么也不做。
     pub fn save(&self, path: &Path) -> io::Result<()> {
+        if self.read_only {
+            return Ok(());
+        }
         let mut recordings: Vec<RawRecording> = self
             .entries
             .iter()
@@ -111,6 +122,9 @@ impl MarkStore {
 
     /// 在 `position`（截到毫秒）给 `track` 加一个没有名字的跳转点，返回它在列表里的位置。
     pub fn add(&mut self, track: &Track, position: Duration) -> Result<usize, AddError> {
+        if self.read_only {
+            return Err(AddError::ReadOnly);
+        }
         if track.path.to_str().is_none() {
             return Err(AddError::UnsupportedPath);
         }
@@ -190,7 +204,10 @@ impl MarkStore {
                 )
             })
             .collect();
-        Self { entries }
+        Self {
+            entries,
+            read_only: false,
+        }
     }
 }
 
@@ -468,5 +485,67 @@ mod tests {
         assert_eq!(next_target(&marks, 9 * MINUTE), Some(1));
         assert_eq!(next_target(&marks, 10 * MINUTE), None);
         assert_eq!(next_target(&[], Duration::ZERO), None);
+    }
+
+    /// 一条跳转点记录的 JSON：/m/旧.flac 在 1 分钟处有一个“开头”。
+    const SAVED: &str = r#"{"version":1,"recordings":[{"path":"/m/旧.flac","file_size":7,"modified_ns":9,"marks":[{"position_ms":60000,"name":"开头"}]}]}"#;
+
+    #[test]
+    fn a_utf16_file_is_kept_aside_before_new_marks_are_written() {
+        use crate::file_records::tests::{backups, utf16};
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("marks.json");
+        fs::write(&path, utf16(SAVED)).unwrap();
+
+        let (mut store, message) = MarkStore::load(&path);
+        assert!(message.unwrap().contains("已改名保留"));
+        let track = recording("/m/新.flac");
+        store.add(&track, 5 * MINUTE).unwrap();
+        store.save(&path).unwrap();
+
+        let kept = backups(&path);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(fs::read(&kept[0]).unwrap(), utf16(SAVED));
+        let (loaded, _) = MarkStore::load(&path);
+        assert_eq!(positions(&loaded, &track), [5 * MINUTE]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn marks_that_could_not_be_loaded_are_never_written_over() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::file_records::tests::utf16;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("marks.json");
+        let track = recording("/m/新.flac");
+
+        // 读不了的文件：目录照样可写，没有防护就会被整个替换掉。
+        fs::write(&path, SAVED).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&path).is_err() {
+            let (mut store, message) = MarkStore::load(&path);
+            assert!(message.unwrap().contains("本次运行不保存跳转点"));
+            assert_eq!(store.add(&track, 5 * MINUTE), Err(AddError::ReadOnly));
+            store.save(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), SAVED);
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        // 无法识别又没能改名保留：之后目录又能写了，也不覆盖。
+        fs::write(&path, utf16(SAVED)).unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(temp.path().join("probe"), b"").is_err() {
+            let (mut store, message) = MarkStore::load(&path);
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(message.unwrap().contains("也无法改名保留"));
+            assert_eq!(store.add(&track, 5 * MINUTE), Err(AddError::ReadOnly));
+            store.save(&path).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), utf16(SAVED));
+        }
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
     }
 }

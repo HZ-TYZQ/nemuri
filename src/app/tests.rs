@@ -3566,3 +3566,37 @@ fn the_now_playing_bar_shows_marks_and_the_named_section() {
     assert!(title.contains("正在播放·耳语很长的名字"), "{title}");
     assert!(title.contains('…'), "{title}");
 }
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_marks_file_is_left_alone_and_b_explains_why() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let music = temp.path().join("music");
+    std::fs::create_dir(&music).unwrap();
+    let file = temp.path().join("data/nemuri/marks.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let saved = r#"{"version":1,"recordings":[]}"#;
+    std::fs::write(&file, saved).unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&file).is_ok() {
+        // 以 root 运行时权限挡不住读取，这个场景无从模拟。
+        return;
+    }
+
+    let mut app = app_in(temp.path(), "music", AppConfig::default());
+    let message = app.view.message.clone().unwrap();
+    assert!(message.starts_with("无法读取跳转点"), "{message}");
+    recordings_fixture(&mut app, &music);
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    press(&mut app, key(KeyCode::Char('b')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("启动时跳转点文件没能读取或保留，本次运行不能添加跳转点")
+    );
+    app.save_marks().unwrap();
+
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+}

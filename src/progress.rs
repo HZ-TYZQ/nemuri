@@ -2,7 +2,8 @@
 //!
 //! 只记录不短于 [`LONG_RECORDING`] 的录音，歌曲照旧每次从头播放。时长以扫描时读到的为准，
 //! 记录、续播和曲库里的显示因此总是一致；时长未知的文件不记录。
-//! 文件读不了时先改名保留，再从空记录开始，下次保存不会覆盖还能找回的数据。
+//! 文件内容用不了时先改名保留，再从空记录开始；文件读不了或没能改名保留时，
+//! 这次运行只在内存里记，不写盘。两种情况都不会覆盖还能找回的数据。
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -55,18 +56,27 @@ pub fn is_long(track: &Track) -> bool {
 #[derive(Debug, Default)]
 pub struct ProgressStore {
     entries: FileRecords<Listened>,
+    /// 启动时原文件读不了或没能改名保留：这次运行不写盘，免得覆盖它。
+    read_only: bool,
 }
 
 impl ProgressStore {
-    /// 读取进度文件；还没有时是空记录。读不了或格式不对时把文件改名保留，
-    /// 返回空记录和一句说明。
+    /// 读取进度文件；还没有时是空记录。用不了时返回空记录和一句说明，
+    /// 规则见 [`file_records::load_json`]。
     pub fn load(path: &Path) -> (Self, Option<String>) {
-        let (raw, message) =
+        let loaded =
             file_records::load_json(path, WHAT, |raw: &RawStore| raw.version == PROGRESS_VERSION);
-        (raw.map(Self::from_raw).unwrap_or_default(), message)
+        let mut store = loaded.raw.map(Self::from_raw).unwrap_or_default();
+        store.read_only = loaded.read_only;
+        (store, loaded.message)
     }
 
+    /// 写盘。启动时原文件读不了或没能保留时什么也不做：启动时已经提示过，
+    /// 收听进度只是便利功能，不值得每次都报错。
     pub fn save(&self, path: &Path) -> io::Result<()> {
+        if self.read_only {
+            return Ok(());
+        }
         let mut recordings: Vec<RawEntry> = self
             .entries
             .iter()
@@ -142,7 +152,10 @@ impl ProgressStore {
                 )
             })
             .collect();
-        Self { entries }
+        Self {
+            entries,
+            read_only: false,
+        }
     }
 }
 
@@ -322,5 +335,70 @@ mod tests {
         let (loaded, _) = ProgressStore::load(&path);
         assert_eq!(loaded.get(&plain.path), Some(Listened::Finished));
         assert_eq!(loaded.get(&odd.path), None);
+    }
+
+    /// 一条进度记录的 JSON，含 /m/旧.flac 听到 1 分钟。
+    const SAVED: &str = r#"{"version":1,"recordings":[{"path":"/m/旧.flac","position_ms":60000,"finished":false,"file_size":7,"modified_ns":9}]}"#;
+
+    #[test]
+    fn a_utf16_file_is_kept_aside_before_new_progress_is_written() {
+        use crate::file_records::tests::{backups, utf16};
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("progress.json");
+        fs::write(&path, utf16(SAVED)).unwrap();
+
+        let (mut store, message) = ProgressStore::load(&path);
+        assert!(message.unwrap().contains("已改名保留"));
+        let track = recording("/m/新.flac", 30);
+        store.record(&track, 5 * MINUTE, 30 * MINUTE);
+        store.save(&path).unwrap();
+
+        let kept = backups(&path);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(fs::read(&kept[0]).unwrap(), utf16(SAVED));
+        let (loaded, _) = ProgressStore::load(&path);
+        assert_eq!(
+            loaded.get(&track.path),
+            Some(Listened::InProgress(5 * MINUTE))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn progress_that_could_not_be_loaded_is_never_written_over() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::file_records::tests::utf16;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("progress.json");
+        let track = recording("/m/新.flac", 30);
+
+        // 读不了的文件：目录照样可写，没有防护就会被整个替换掉。
+        fs::write(&path, SAVED).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&path).is_err() {
+            let (mut store, message) = ProgressStore::load(&path);
+            assert!(message.unwrap().contains("本次运行不保存收听进度"));
+            assert!(store.record(&track, 5 * MINUTE, 30 * MINUTE));
+            store.save(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), SAVED);
+        }
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+
+        // 无法识别又没能改名保留：之后目录又能写了，也不覆盖。
+        fs::write(&path, utf16(SAVED)).unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o555)).unwrap();
+        if fs::write(temp.path().join("probe"), b"").is_err() {
+            let (mut store, message) = ProgressStore::load(&path);
+            fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(message.unwrap().contains("也无法改名保留"));
+            store.record(&track, 5 * MINUTE, 30 * MINUTE);
+            store.save(&path).unwrap();
+            assert_eq!(fs::read(&path).unwrap(), utf16(SAVED));
+        }
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o755)).unwrap();
     }
 }

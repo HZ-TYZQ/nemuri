@@ -271,13 +271,18 @@ these.
 Listening progress of recordings of 10 minutes or more. Starting such a
 recording continues where it was left unless it was finished; 0 jumps back to
 the start. Library rows show the progress, and a renamed file keeps it after
-the next scan. An unreadable file is renamed aside and a new one is started.
+the next scan. A file that cannot be parsed, including one not saved as UTF-8,
+is renamed aside and a new one is started. A file that cannot be read, or cannot
+be renamed aside, is left as it is and nothing is saved to it for the rest of
+the run.
 .TP
 .I $XDG_DATA_HOME/nemuri/marks.json
 Jump marks of recordings of 10 minutes or more, written as soon as they change.
 Marks follow a renamed file after the next scan, and marks past the end of a
-shortened file are kept but not shown. An unreadable file is renamed aside and
-a new one is started.
+shortened file are kept but not shown. A file that cannot be parsed, including
+one not saved as UTF-8, is renamed aside and a new one is started. A file that
+cannot be read, or cannot be renamed aside, is left as it is, and no marks can
+be added for the rest of the run.
 .TP
 .I $XDG_CACHE_HOME/nemuri/library.sqlite3
 Rebuildable incremental music metadata cache.
