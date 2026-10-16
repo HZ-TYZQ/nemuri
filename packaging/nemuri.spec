@@ -108,7 +108,7 @@ install -Dpm 0644 assets/icons/%{name}-48.png %{buildroot}%{_datadir}/icons/hico
 - Preserve playback on audio output failure and allow manual recovery
 - Refresh playback action symbols
 
-* Sun Sep 07 2026 HZ-TYZQ - 1.3.0-1
+* Mon Sep 07 2026 HZ-TYZQ - 1.3.0-1
 - Add a play queue panel with jump-to, remove, reorder and clear
 - Sort the library by path, title, artist, album or duration in either direction
 - Read track and disc numbers so album order follows the album itself
