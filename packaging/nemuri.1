@@ -54,6 +54,25 @@ Seek backward or forward by 60 seconds.
 .BR 0 \(en 9
 Jump to 0 through 90 percent of the current track.
 .TP
+.B b
+Add a jump mark at the current position of the playing or paused recording.
+Only recordings of 10 minutes or more take marks, and a mark within one second
+of an existing one is refused. The progress bar shows marks as |, and when the
+current section's mark has a name, the now playing border shows it.
+.TP
+.B B
+Open the jump marks of the playing recording: Enter jumps to the selected mark,
+e renames it (an empty name leaves only its time), d deletes it, and Esc or B
+closes the panel.
+.TP
+.BR { , }
+Jump to the previous or next jump mark. Within 3 seconds after a mark,
+.B {
+goes to the one before it, and before the first mark it goes to the start;
+after the last mark,
+.B }
+stays put.
+.TP
 .BR - , =
 Lower or raise volume by 5 percent.
 .TP
@@ -253,6 +272,12 @@ Listening progress of recordings of 10 minutes or more. Starting such a
 recording continues where it was left unless it was finished; 0 jumps back to
 the start. Library rows show the progress, and a renamed file keeps it after
 the next scan. An unreadable file is renamed aside and a new one is started.
+.TP
+.I $XDG_DATA_HOME/nemuri/marks.json
+Jump marks of recordings of 10 minutes or more, written as soon as they change.
+Marks follow a renamed file after the next scan, and marks past the end of a
+shortened file are kept but not shown. An unreadable file is renamed aside and
+a new one is started.
 .TP
 .I $XDG_CACHE_HOME/nemuri/library.sqlite3
 Rebuildable incremental music metadata cache.
