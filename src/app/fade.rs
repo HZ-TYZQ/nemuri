@@ -31,16 +31,15 @@ impl App {
         self.set_clip_gain(gain);
     }
 
-    /// 装载 `origin` 之前先按它的开头设好片段那一份增益：要淡入的从无声开始，不会先漏出一下原音量；
-    /// 不淡入的设回 1，不会被上一条淡出到 0 的增益压住。
-    pub(super) fn prepare_clip_fade(&mut self, origin: &Origin) {
-        let gain = match origin {
+    /// `origin` 刚装载、还没开始放时片段那一份增益：要淡入的是 0，不会先漏出一下原音量；
+    /// 不淡入的是 1，不会被上一条淡出到 0 的增益压住。装载时在开始放之前设上（见 `load_track`）。
+    pub(super) fn starting_clip_gain(&self, origin: &Origin) -> f32 {
+        match origin {
             Origin::Entry { range, .. } => {
                 clip_gain(*range, None, range.start, self.config.clip_fade)
             }
             Origin::Library => 1.0,
-        };
-        self.set_clip_gain(gain);
+        }
     }
 
     pub(super) fn set_sleep_gain(&mut self, gain: f32) {
@@ -48,7 +47,7 @@ impl App {
         self.apply_fade_gain();
     }
 
-    fn set_clip_gain(&mut self, gain: f32) {
+    pub(super) fn set_clip_gain(&mut self, gain: f32) {
         self.playback.clip_gain = gain;
         self.apply_fade_gain();
     }

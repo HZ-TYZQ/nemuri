@@ -4877,11 +4877,45 @@ fn a_clip_that_fails_to_load_leaves_the_playing_one_audible() {
     press(&mut app, key(KeyCode::Char('n')));
     assert_eq!(gain_at(&mut app, &control, 3 * MINUTE), 1.0);
 
-    // p 退回上一条，它的文件没了：还在放的这一条照常有声音，不用等下一个 tick。
+    // p 退回上一条，它从中间开始，文件却没了：还在放的这一条在装载期间和之后都没被压到无声。
     std::fs::remove_file(&paths[0]).unwrap();
     press(&mut app, key(KeyCode::Char('p')));
     assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.gain_when_loading(), Some(1.0));
     assert_eq!(control.fade_gain(), 1.0);
+}
+
+#[test]
+fn a_fading_clip_keeps_its_volume_until_the_next_source_takes_over() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None), (1, 2, Some(4), None)]);
+    let fading = 15 * MINUTE - SECOND - HALF_SECOND;
+
+    // 淡出到 0.25 时点播曲库里的歌：装载期间旧的仍是 0.25，新的从满音量开始。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    play_library_row(&mut app, 2);
+    assert_eq!(app.playback.playing_index, Some(2));
+    assert_eq!(control.gain_when_loading(), Some(0.25));
+    assert_eq!(control.gain_when_resumed(), Some(1.0));
+
+    // 换到从中间开始的片段：旧的不会先被压到无声，新的从无声开始。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    press(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.gain_when_loading(), Some(0.25));
+    assert_eq!(control.gain_when_resumed(), Some(0.0));
+
+    // 装载失败：旧的音量自始至终不变。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    std::fs::remove_file(&paths[2]).unwrap();
+    play_library_row(&mut app, 2);
+    assert_eq!(app.playback.playing_index, Some(0));
+    assert_eq!(control.gain_when_loading(), Some(0.25));
+    assert_eq!(control.fade_gain(), 0.25);
 }
 
 #[test]

@@ -20,6 +20,9 @@ struct FakeState {
     volume: u8,
     muted: bool,
     fade_gain: f32,
+    /// 最近一次开始装载、最近一次从暂停开始播放时的淡出增益。
+    gain_when_loading: Option<f32>,
+    gain_when_resumed: Option<f32>,
     channel_mix: ChannelMix,
     output_down: bool,
     recovering: bool,
@@ -44,6 +47,8 @@ impl FakeBackend {
             volume: 100,
             muted: false,
             fade_gain: 1.0,
+            gain_when_loading: None,
+            gain_when_resumed: None,
             channel_mix: ChannelMix::default(),
             output_down: false,
             recovering: false,
@@ -58,6 +63,8 @@ impl FakeBackend {
 
     fn load(&mut self, path: &Path, target: PlayState, position: Duration) -> Result<(), String> {
         let mut state = self.shared.borrow_mut();
+        // 真的后端打开和解码新文件时，旧的还在出声。
+        state.gain_when_loading = Some(state.fade_gain);
         if state.output_down {
             return Err("音频输出中断，请按空格重试".to_owned());
         }
@@ -80,6 +87,16 @@ impl FakeControl {
     }
 
     /// 最近一次设置的左右平衡与声道互换。
+    /// 最近一次开始装载时的淡出增益：装载期间旧曲目听到的音量。
+    pub(crate) fn gain_when_loading(&self) -> Option<f32> {
+        self.0.borrow().gain_when_loading
+    }
+
+    /// 最近一次从暂停开始播放时的淡出增益：新曲目出声时的音量。
+    pub(crate) fn gain_when_resumed(&self) -> Option<f32> {
+        self.0.borrow().gain_when_resumed
+    }
+
     pub(crate) fn channel_mix(&self) -> ChannelMix {
         self.0.borrow().channel_mix
     }
@@ -151,6 +168,7 @@ impl PlaybackBackend for FakeBackend {
             state.recovering = true;
         } else if state.state == PlayState::Paused {
             state.state = PlayState::Playing;
+            state.gain_when_resumed = Some(state.fade_gain);
         }
     }
 
