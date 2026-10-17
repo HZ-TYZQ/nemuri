@@ -214,8 +214,9 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
     let temporary = parent.join(format!(".{file_name}.{}.{}.tmp", std::process::id(), nonce));
 
     let result = (|| {
-        let mut file = fs::File::create(&temporary)?;
+        let mut file = create_temporary(&temporary)?;
         file.write_all(contents)?;
+        keep_permissions(&file, path)?;
         file.sync_all()?;
         fs::rename(&temporary, path)
     })();
@@ -223,6 +224,42 @@ pub fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// 临时文件一建出来就只有自己能读写，写内容的过程中别人读不到；新建的文件也就保持这样。
+/// 只新建不打开：`mode` 只在新建时起作用，打开一个已有的同名文件会沿用它的权限。
+#[cfg(unix)]
+fn create_temporary(path: &Path) -> io::Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn create_temporary(path: &Path) -> io::Result<fs::File> {
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+}
+
+/// 替换已有的文件时沿用它的权限：重命名之后留下的是临时文件的权限，
+/// 不沿用的话，用户收紧过的文件每保存一次就按 umask 放宽一次。读不到原来的权限时保持 0600。
+#[cfg(unix)]
+fn keep_permissions(file: &fs::File, target: &Path) -> io::Result<()> {
+    match fs::metadata(target) {
+        Ok(metadata) => file.set_permissions(metadata.permissions()),
+        Err(_) => Ok(()),
+    }
+}
+
+/// Windows 上的权限是 ACL，新文件按所在目录继承；`Permissions` 只有只读一项，不用沿用。
+#[cfg(not(unix))]
+fn keep_permissions(_file: &fs::File, _target: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -392,5 +429,42 @@ mod tests {
             fs::read_to_string(&path).unwrap(),
             "// 音乐在这\nlibrary \"/srv/音乐\" // 旧的\n"
         );
+    }
+
+    #[cfg(unix)]
+    fn mode(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_keeps_the_permissions_of_the_file_it_replaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("progress.json");
+        for wanted in [0o600, 0o640, 0o644] {
+            fs::write(&path, "{}").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(wanted)).unwrap();
+            atomic_write(&path, b"{\"recordings\": {}}").unwrap();
+            assert_eq!(mode(&path), wanted, "{wanted:o}");
+            assert_eq!(fs::read_to_string(&path).unwrap(), "{\"recordings\": {}}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn new_files_and_the_temporary_file_are_private_from_the_start() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("data").join("marks.json");
+        atomic_write(&path, b"{}").unwrap();
+        assert_eq!(mode(&path), 0o600);
+
+        // 内容写进去之前就是 0600。
+        let temporary = temp.path().join(".marks.json.tmp");
+        drop(create_temporary(&temporary).unwrap());
+        assert_eq!(mode(&temporary), 0o600);
+        // 不打开已有的文件，也就不会沿用它的权限。
+        assert!(create_temporary(&temporary).is_err());
     }
 }

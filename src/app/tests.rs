@@ -5484,6 +5484,85 @@ fn the_entries_panel_moves_renames_and_picks_the_bounds_of_an_entry() {
 }
 
 #[test]
+fn a_clip_can_be_reset_to_the_whole_file_after_its_marks_are_deleted() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    marks_fixture(&mut app, &music, &[5, 15], MINUTE);
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    let _ = app
+        .playlists
+        .add_entry(
+            0,
+            &track(music.join("gone.wav")),
+            range(5 * MINUTE, Some(15 * MINUTE)),
+            None,
+        )
+        .unwrap();
+    // 删光这条录音的跳转点，列表里的片段还是 5:00–15:00。
+    press(&mut app, key(KeyCode::Char('B')));
+    press(&mut app, key(KeyCode::Char('d')));
+    press(&mut app, key(KeyCode::Char('d')));
+    press(&mut app, key(KeyCode::Esc));
+    assert!(app.current_marks().is_empty());
+    press(&mut app, key(KeyCode::Char('P')));
+    press(&mut app, key(KeyCode::Enter));
+
+    // 开头只剩文件开头可挑。
+    press(&mut app, key(KeyCode::Char('s')));
+    assert_eq!(app.view.overlay, Overlay::EntryBound);
+    let starts: Vec<Option<Duration>> = app
+        .bound_choices()
+        .iter()
+        .map(|choice| choice.position)
+        .collect();
+    assert_eq!(starts, [Some(Duration::ZERO)]);
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.message.as_deref(), Some("开头改为 0:00"));
+    assert_eq!(
+        entries_of(&app, 0)[0].0,
+        range(Duration::ZERO, Some(15 * MINUTE))
+    );
+
+    // 开头已经是 0:00，再按 s 只提示；结尾还能改回文件结尾。
+    press(&mut app, key(KeyCode::Char('s')));
+    assert_eq!(app.view.overlay, Overlay::PlaylistTracks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("这首没有跳转点，开头只能是 0:00")
+    );
+    press(&mut app, key(KeyCode::Char('S')));
+    assert_eq!(app.view.overlay, Overlay::EntryBound);
+    assert_eq!(app.bound_choices().len(), 1);
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.message.as_deref(), Some("结尾改为 文件结尾"));
+    assert_eq!(entries_of(&app, 0)[0].0, crate::playlist::Range::WHOLE);
+    let saved = crate::playlist::PlaylistStore::load(app.paths.playlists_dir.clone()).unwrap();
+    assert_eq!(
+        saved.all()[0].entries[0].range,
+        crate::playlist::Range::WHOLE
+    );
+
+    // 整首了就和以前一样只提示。
+    press(&mut app, key(KeyCode::Char('S')));
+    assert_eq!(app.view.overlay, Overlay::PlaylistTracks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("这首没有跳转点，只能整首播放")
+    );
+
+    // 文件不在曲库中的片段也能改回去，标题用文件名。
+    app.dispatch(Action::SelectRow(1));
+    press(&mut app, key(KeyCode::Char('S')));
+    assert_eq!(app.view.overlay, Overlay::EntryBound);
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    assert!(screen.contains("结尾·gone.wav"), "{screen}");
+    assert!(screen.contains("文件结尾"), "{screen}");
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(entries_of(&app, 0)[1].0, range(5 * MINUTE, None));
+}
+
+#[test]
 fn moving_entries_of_the_playing_playlist_keeps_the_current_entry() {
     let (temp, mut app, control) = test_app_with_control(AppConfig::default());
     let paths = playlist_fixture(temp.path(), &mut app, &["a.wav", "b.wav", "c.wav"], 3);
@@ -5538,9 +5617,11 @@ fn the_playlist_panels_show_counts_modes_ranges_and_the_playing_entry() {
         assert!(screen.contains(expected), "缺少“{expected}”：\n{screen}");
     }
 
+    // 整首的条目没有跳转点：只提示，不打开选择面板。截过的片段还能改回去，见
+    // a_clip_can_be_reset_to_the_whole_file_after_its_marks_are_deleted。
+    app.dispatch(Action::SelectRow(1));
     press(&mut app, key(KeyCode::Char('S')));
     let (_, backend) = render(&app, 100, 30);
     let screen = screen_rows(&backend).join("\n");
-    // 这首没有跳转点：只提示，不打开选择面板。
     assert!(screen.contains("这首没有跳转点"), "{screen}");
 }

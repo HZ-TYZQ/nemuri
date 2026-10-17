@@ -144,12 +144,13 @@ impl App {
     }
 
     /// 条目开头或结尾能挑的位置：开头是文件开头和结尾之前的跳转点，
-    /// 结尾是开头之后的跳转点和文件结尾。跳转点按扫描时的时长截取。
+    /// 结尾是开头之后的跳转点和文件结尾。跳转点按扫描时的时长截取；
+    /// 文件不在曲库中时没有跳转点可挑，只剩文件开头或文件结尾。
     pub fn bound_choices(&self) -> Vec<BoundChoice> {
-        let Some((entry, Some(track))) = self.selected_entry() else {
+        let Some((entry, track)) = self.selected_entry() else {
             return Vec::new();
         };
-        let marks = self.marks_of(track).iter();
+        let marks = track.map_or(&[][..], |track| self.marks_of(track)).iter();
         let choice = |mark: &Mark| BoundChoice {
             position: Some(mark.position),
             mark: Some(mark.clone()),
@@ -180,19 +181,26 @@ impl App {
     }
 
     /// 条目面板里的 `s` / `S`：挑开头或结尾，光标落在现在的位置上。
-    /// 这个文件没有跳转点（短曲目、还没设、或者不在曲库中）时只能整首播放，只提示。
+    /// 这个文件没有跳转点（短曲目、还没设、删光了或者不在曲库中）时挑不了中间的位置，
+    /// 但截过的开头或结尾还能改回文件开头或文件结尾；连这也没有时只提示。
     pub(super) fn open_entry_bound(&mut self, bound: Bound) {
         let Some((entry, track)) = self.selected_entry() else {
             return;
         };
-        if track.is_none_or(|track| self.marks_of(track).is_empty()) {
-            self.view.message = Some("这首没有跳转点，只能整首播放".to_owned());
+        // 现在的位置，以及不截时的位置（文件开头或文件结尾）。
+        let (current, uncut) = match bound {
+            Bound::Start => (Some(entry.range.start), Some(Duration::ZERO)),
+            Bound::End => (entry.range.end, None),
+        };
+        if current == uncut && track.is_none_or(|track| self.marks_of(track).is_empty()) {
+            let reason = match (entry.range == Range::WHOLE, bound) {
+                (true, _) => "这首没有跳转点，只能整首播放",
+                (false, Bound::Start) => "这首没有跳转点，开头只能是 0:00",
+                (false, Bound::End) => "这首没有跳转点，结尾只能是文件结尾",
+            };
+            self.view.message = Some(reason.to_owned());
             return;
         }
-        let current = match bound {
-            Bound::Start => Some(entry.range.start),
-            Bound::End => entry.range.end,
-        };
         self.view.bound = bound;
         self.view.bound_selected = self
             .bound_choices()
