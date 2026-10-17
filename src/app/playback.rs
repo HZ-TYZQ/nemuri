@@ -140,8 +140,7 @@ impl App {
             Origin::Library => (self.opening(index), false),
             Origin::Entry { range, .. } => (Opening::Clip(range.start), true),
         };
-        let clip_gain = self.starting_clip_gain(&origin);
-        match self.load_track(&path, autoplay, opening.position(), exact, clip_gain) {
+        match self.load_track(&path, autoplay, opening.position(), exact, &origin) {
             Ok(opened_at) => {
                 self.playback.loads += 1;
                 self.start_playthrough();
@@ -186,16 +185,16 @@ impl App {
     /// 从中间装载失败（例如文件被剪短）时退回从头装载；`exact` 时不退回，直接报错。
     /// 返回实际开始的位置，从头时为 None。
     ///
-    /// 总是先暂停着装载，再设上新的一项的片段增益 `clip_gain`，然后才开始放。
-    /// 播放器打开和解码新文件时旧的还在出声，装载完成时才换下它；先设增益的话，
-    /// 旧的那一条会突然变响或没声。装载失败时增益不变，旧的照常放。
+    /// 总是先暂停着装载，再按实际开始的位置设上新的一项（来自 `origin`）截断处的增益，
+    /// 然后才开始放。播放器打开和解码新文件时旧的还在出声，装载完成时才换下它；
+    /// 先设增益的话，旧的那一条会突然变响或没声。装载失败时增益不变，旧的照常放。
     fn load_track(
         &mut self,
         path: &Path,
         autoplay: bool,
         start: Option<Duration>,
         exact: bool,
-        clip_gain: f32,
+        origin: &Origin,
     ) -> Result<Option<Duration>, String> {
         let player = &mut self.playback.player;
         let opened = match start {
@@ -212,7 +211,12 @@ impl App {
                 None
             }
         };
-        self.set_clip_gain(clip_gain);
+        // 曲库播放从起点或记下的位置开始时淡入，退回 0:00 的不淡；片段按自己的开头淡入。
+        self.playback.fade_in_from = match origin {
+            Origin::Library => opened,
+            Origin::Entry { .. } => None,
+        };
+        self.set_clip_gain(self.starting_clip_gain(origin));
         if autoplay {
             self.playback.player.resume();
         }

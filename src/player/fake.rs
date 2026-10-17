@@ -24,6 +24,8 @@ struct FakeState {
     gain_when_loading: Option<f32>,
     gain_when_resumed: Option<f32>,
     channel_mix: ChannelMix,
+    /// 文件被剪短后剩下的长度：从这之后的位置打不开。
+    length: Option<Duration>,
     output_down: bool,
     recovering: bool,
     events: Vec<PlayerEvent>,
@@ -50,6 +52,7 @@ impl FakeBackend {
             gain_when_loading: None,
             gain_when_resumed: None,
             channel_mix: ChannelMix::default(),
+            length: None,
             output_down: false,
             recovering: false,
             events: Vec::new(),
@@ -72,6 +75,9 @@ impl FakeBackend {
         if !bytes.starts_with(b"RIFF") {
             return Err(format!("无法识别或解码 {}", path.display()));
         }
+        if !position.is_zero() && state.length.is_some_and(|length| position >= length) {
+            return Err("无法恢复播放位置: 超出文件长度".to_owned());
+        }
         state.state = target;
         state.position = position;
         state.stop_at = None;
@@ -81,7 +87,7 @@ impl FakeBackend {
 }
 
 impl FakeControl {
-    /// 最近一次设置的淡出增益：睡眠定时和片段淡入淡出里较小的那个。
+    /// 最近一次设置的淡出增益：睡眠定时和截断处的淡入淡出里较小的那个。
     pub(crate) fn fade_gain(&self) -> f32 {
         self.0.borrow().fade_gain
     }
@@ -104,6 +110,11 @@ impl FakeControl {
     /// App 最近一次设的停止位置；装载新曲目和停止时清掉。
     pub(crate) fn stop_at(&self) -> Option<Duration> {
         self.0.borrow().stop_at
+    }
+
+    /// 文件被剪短，只剩 `length`：之后从这里往后的位置装载失败，和真的后端恢复位置失败一样。
+    pub(crate) fn shorten_file(&self, length: Duration) {
+        self.0.borrow_mut().length = Some(length);
     }
 
     /// 当前曲目自然播完。

@@ -5,6 +5,7 @@
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::lyrics::Lyrics;
 use crate::media::MediaEvent;
@@ -43,9 +44,11 @@ pub struct Playback {
     /// 等待交给系统媒体会话的事件。
     pub(super) media_events: Vec<MediaEvent>,
     pub(super) sleep: SleepTimer,
-    /// 睡眠定时和片段切换各自的淡出增益，见 `fade.rs`。
+    /// 睡眠定时和声音被截断处各自的淡出增益，见 `fade.rs`。
     pub(super) sleep_gain: f32,
     pub(super) clip_gain: f32,
+    /// 曲库播放这次从中间装载、要从哪里淡入；从 0:00 开始或淡入已经结束时为 None。
+    pub(super) fade_in_from: Option<Duration>,
     /// 最近一次交给后端的淡出增益（上面两个里较小的），没变时不重复设置。
     pub(super) fade_gain: f32,
 }
@@ -67,6 +70,7 @@ impl Playback {
             sleep: SleepTimer::Off,
             sleep_gain: 1.0,
             clip_gain: 1.0,
+            fade_in_from: None,
             fade_gain: 1.0,
         }
     }
