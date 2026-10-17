@@ -6,7 +6,8 @@
 //! 粘贴框把一段时间轴（每行“03:21 掏耳”）一次加成带名字的跳转点，识别规则见 `timeline_text`。
 //!
 //! 起点和终点是标了角色的跳转点。起点在装载时用（见 `progress.rs` 的 `opening`）；
-//! 终点交给播放器作停止位置，播到那里就和自然播完一样接下一首。
+//! 终点交给播放器作停止位置，播到那里就和自然播完一样接下一首。在面板里给选中的跳转点设
+//! （`s` / `S`），或者在曲库里按 `(` / `)` 在当前位置设。
 //!
 //! 放播放列表里的片段时，只用片段以内的跳转点，时间按片段内的时间显示；
 //! 录音的起点和终点在列表里不起作用，也不能在这时设。
@@ -14,7 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::marks::{self, AddError, Bounds, Mark, MarkStore, Role, RoleError};
+use crate::marks::{self, AddError, Bounds, Mark, MarkStore, Role, RoleChange, RoleError};
 use crate::player::PlayState;
 use crate::playlist::Range;
 use crate::progress;
@@ -98,6 +99,22 @@ pub(super) fn label(mark: &Mark) -> String {
     match &mark.name {
         Some(name) => format!("{} {name}", fmt_duration(mark.position)),
         None => fmt_duration(mark.position),
+    }
+}
+
+/// 设上或取消起点、终点之后的提示；`at` 是这个跳转点的称呼。
+fn role_message(change: RoleChange, at: &str) -> String {
+    match (change.role, change.was) {
+        (Role::Start, Role::End) => {
+            format!("已把终点 {at} 改为起点，以后从这里开始，播到文件结尾")
+        }
+        (Role::End, Role::Start) => {
+            format!("已把起点 {at} 改为终点，以后从 0:00 开始，播到这里就算播完")
+        }
+        (Role::Start, _) => format!("已设为起点 {at}，以后从头播放时从这里开始"),
+        (Role::End, _) => format!("已设为终点 {at}，以后播到这里就算播完"),
+        (Role::Plain, Role::Start) => "已取消起点，以后从 0:00 开始".to_owned(),
+        (Role::Plain, _) => "已取消终点，以后播到文件结尾".to_owned(),
     }
 }
 
@@ -402,25 +419,66 @@ impl App {
             return;
         };
         let track = &self.catalog.tracks()[index];
-        let at = label(&mark);
         match self
             .marks
             .store
             .toggle_role(track, self.view.marks_selected, role, duration)
         {
             Ok(change) => {
-                let message = match (change.role, change.was) {
-                    (Role::Start, Role::End) => {
-                        format!("已把终点 {at} 改为起点，以后从这里开始，播到文件结尾")
-                    }
-                    (Role::End, Role::Start) => {
-                        format!("已把起点 {at} 改为终点，以后从 0:00 开始，播到这里就算播完")
-                    }
-                    (Role::Start, _) => format!("已设为起点 {at}，以后从头播放时从这里开始"),
-                    (Role::End, _) => format!("已设为终点 {at}，以后播到这里就算播完"),
-                    (Role::Plain, Role::Start) => "已取消起点，以后从 0:00 开始".to_owned(),
-                    (Role::Plain, _) => "已取消终点，以后播到文件结尾".to_owned(),
-                };
+                self.save_marks_now(role_message(change, &label(&mark)));
+                self.apply_stop();
+            }
+            Err(error) => {
+                if let Some(reason) = self.role_refusal(error) {
+                    self.view.message = Some(reason);
+                }
+            }
+        }
+    }
+
+    /// `(` / `)`：在当前位置设起点或终点，已经是了就取消。1 秒以内已有跳转点时用它，
+    /// 没有时在这里加一个，加点和设角色一次写盘。能用的条件和 `b` 一样；
+    /// 放播放列表的条目时不能设，和 `s` / `S` 一样。
+    ///
+    /// 这一遍不跳转、不改音量。终点设在当前位置时，播放器只在一路播到终点时停，
+    /// 这一遍会一直放到文件结尾。
+    pub(super) fn toggle_role_here(&mut self, role: Role) {
+        let index = match self.mark_target() {
+            Ok(index) => index,
+            Err(reason) => {
+                self.view.message = Some(reason.to_owned());
+                return;
+            }
+        };
+        if !self.plays_from_library() {
+            self.view.message = Some(NO_ROLES_IN_PLAYLIST.to_owned());
+            return;
+        }
+        let Some(duration) = self.effective_duration() else {
+            return;
+        };
+        let track = &self.catalog.tracks()[index];
+        let position = self.playback.player.position();
+        match self
+            .marks
+            .store
+            .toggle_role_at(track, position, role, duration)
+        {
+            Ok(set) => {
+                let marks = self.marks.store.marks(&track.path);
+                let mut message = role_message(set.change, &label(&marks[set.index]));
+                // 面板里看得见角色挪到了哪里，按键时看不见，要说出来。
+                if let Some(old) = set
+                    .change
+                    .replaced
+                    .and_then(|old| marks.iter().find(|mark| mark.position == old))
+                {
+                    let name = match set.change.role {
+                        Role::Start => "起点",
+                        Role::End | Role::Plain => "终点",
+                    };
+                    message.push_str(&format!("（原来的{name} {} 留作普通跳转点）", label(old)));
+                }
                 self.save_marks_now(message);
                 self.apply_stop();
             }

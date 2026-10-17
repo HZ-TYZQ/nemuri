@@ -3901,6 +3901,11 @@ fn an_unreadable_marks_file_is_left_alone_and_b_explains_why() {
         app.view.message.as_deref(),
         Some("启动时跳转点文件没能读取或保留，本次运行不能添加跳转点")
     );
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("启动时跳转点文件没能读取或保留，本次运行不能添加跳转点")
+    );
     app.save_marks().unwrap();
 
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -4339,6 +4344,177 @@ fn the_help_says_zero_goes_to_the_start_point_first() {
     let (_, backend) = render(&app, 80, 40);
     assert!(
         popup_text(&backend).contains("0–9跳到0%–90%位置（有起点时0先回到起点）"),
+        "{}",
+        popup_text(&backend)
+    );
+}
+
+/// 跳转点文件里记下的跳转点：位置（毫秒）和起点、终点标志。
+fn saved_marks(app: &App) -> Vec<(u64, bool, bool)> {
+    let (store, _) = crate::marks::MarkStore::load(&app.paths.marks_file);
+    store
+        .marks(&app.catalog.tracks()[0].path)
+        .iter()
+        .map(|mark| {
+            (
+                mark.position.as_millis() as u64,
+                mark.role == Role::Start,
+                mark.role == Role::End,
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn parentheses_set_the_start_and_end_points_where_playback_is() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    app.tick_timers(app.now);
+
+    // 附近没有跳转点：在这里加一个并设为起点，一次写进文件；不跳转，也不改音量。
+    let start = MINUTE + 30 * SECOND;
+    assert!(app.playback.player.seek_to(start));
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已设为起点 1:30，以后从头播放时从这里开始")
+    );
+    assert_eq!(mark_positions(&app), [start]);
+    assert_eq!(saved_marks(&app), [(90_000, true, false)]);
+    assert_eq!(app.player().position(), start);
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 1.0);
+
+    // 设终点：交给播放器；已经在终点上，这一遍不淡出，接着放。
+    assert!(app.playback.player.seek_to(END_POINT));
+    press(&mut app, key(KeyCode::Char(')')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已设为终点 18:00，以后播到这里就算播完")
+    );
+    assert_eq!(control.stop_at(), Some(END_POINT));
+    assert_eq!(
+        saved_marks(&app),
+        [(90_000, true, false), (1_080_000, false, true)]
+    );
+    assert_eq!(app.player().state(), PlayState::Playing);
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 1.0);
+
+    // 以后从头播放时从起点开始。
+    reload_rec1(&mut app);
+    assert_eq!(app.player().position(), start);
+    assert_eq!(control.stop_at(), Some(END_POINT));
+}
+
+#[test]
+fn parentheses_use_a_mark_within_a_second_and_say_which_one_they_replace() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[5, 15], MINUTE);
+    name_mark(&mut app, 0, "正片");
+
+    // 5:00.6 离 5:00 的跳转点不到 1 秒：用它，名字不变，不多出一个。
+    assert!(
+        app.playback
+            .player
+            .seek_to(5 * MINUTE + Duration::from_millis(600))
+    );
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已设为起点 5:00 正片，以后从头播放时从这里开始")
+    );
+    assert_eq!(mark_positions(&app), [5 * MINUTE, 15 * MINUTE]);
+    // 再按一次取消，跳转点还在。
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已取消起点，以后从 0:00 开始")
+    );
+    assert_eq!(mark_positions(&app), [5 * MINUTE, 15 * MINUTE]);
+
+    // 另设一个起点：原来的变回普通跳转点，提示里说出来。
+    press(&mut app, key(KeyCode::Char('(')));
+    assert!(app.playback.player.seek_to(3 * MINUTE));
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已设为起点 3:00，以后从头播放时从这里开始（原来的起点 5:00 正片 留作普通跳转点）")
+    );
+    assert_eq!(mark_positions(&app), [3 * MINUTE, 5 * MINUTE, 15 * MINUTE]);
+    let bounds = crate::marks::bounds(app.current_marks());
+    assert_eq!(bounds.start, Some(3 * MINUTE));
+
+    // 起点上按 )：改为终点要在 0:00 之后，可以；它从起点改成终点。
+    press(&mut app, key(KeyCode::Char(')')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已把起点 3:00 改为终点，以后从 0:00 开始，播到这里就算播完")
+    );
+}
+
+#[test]
+fn parentheses_refuse_like_s_and_b_and_then_change_nothing() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let music = temp.path().join("music");
+    bounds_fixture(&mut app, &music, 19 * MINUTE);
+    let all = [2 * MINUTE, 5 * MINUTE, 15 * MINUTE, END_POINT];
+
+    // 终点之后设起点、起点之前设终点：照 s / S 的提示，不加跳转点。
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(app.view.message.as_deref(), Some("起点要在终点 18:00 之前"));
+    assert!(app.playback.player.seek_to(MINUTE));
+    press(&mut app, key(KeyCode::Char(')')));
+    assert_eq!(app.view.message.as_deref(), Some("终点要在起点 2:00 之后"));
+    assert_eq!(mark_positions(&app), all);
+
+    // 放播放列表的条目时不能设。
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("播放列表里不用录音的起点和终点，从曲库播放时再设")
+    );
+
+    // 短曲、停止时：和 b 一样说明原因。
+    play_library_row(&mut app, 2);
+    press(&mut app, key(KeyCode::Char(')')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("只有 10 分钟以上的录音能设跳转点")
+    );
+    app.playback.player.stop();
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("先开始播放，才能使用跳转点")
+    );
+
+    play_library_row(&mut app, 0);
+    assert_eq!(mark_positions(&app), all);
+}
+
+#[test]
+fn parentheses_are_typed_into_the_search_box() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    assert!(app.playback.player.seek_to(5 * MINUTE));
+    press(&mut app, key(KeyCode::Char('/')));
+    type_text(&mut app, "()");
+    assert_eq!(app.catalog.query(), "()");
+    assert!(mark_positions(&app).is_empty());
+}
+
+#[test]
+fn the_help_lists_the_start_and_end_keys() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.dispatch(Action::OpenOverlay(Overlay::Help));
+    let (_, backend) = render(&app, 80, 40);
+    assert!(
+        popup_text(&backend).contains("(/)在当前位置设起点/终点"),
         "{}",
         popup_text(&backend)
     );

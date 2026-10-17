@@ -52,6 +52,8 @@ pub enum Action {
     /// 跳到上一个跳转点；刚过一个点不久时跳到再前面一个。
     PreviousMark,
     NextMark,
+    /// 在当前位置把长录音的跳转点设为起点或终点，附近没有时加一个；已经是了就取消。
+    ToggleRoleHere(Role),
 
     // 显示与曲库
     ToggleVisualizer,
@@ -233,6 +235,7 @@ impl App {
             Action::AddMark => self.add_mark(),
             Action::PreviousMark => self.jump_to_previous_mark(),
             Action::NextMark => self.jump_to_next_mark(),
+            Action::ToggleRoleHere(role) => self.toggle_role_here(role),
             Action::RemoveMark => self.remove_selected_mark(),
             Action::RenameMark => self.start_renaming_mark(),
             Action::ToggleMarkRole(role) => self.toggle_selected_mark_role(role),
