@@ -232,8 +232,13 @@ fn scan_library(
     events: &Sender<LibraryEvent>,
     cancel: &AtomicBool,
 ) -> Result<(Vec<Track>, Vec<String>), String> {
-    let root_text = root.to_string_lossy().into_owned();
-    let cached = load_cached(connection, &root_text)?;
+    // 索引用文本存路径。不是 UTF-8 的路径转成文本会丢字节，查回来就成了另一个不存在的文件，
+    // 所以这样的路径不进索引，每次扫描都重读标签；曲库目录本身不是 UTF-8 时整个曲库都不用索引。
+    let root_text = root.to_str();
+    let cached = match root_text {
+        Some(root_text) => load_cached(connection, root_text)?,
+        None => HashMap::new(),
+    };
     let scan_id = unix_nanos();
     let mut warnings = Vec::new();
     let files = collect_audio_files(root, &mut warnings);
@@ -256,10 +261,9 @@ fn scan_library(
         };
         let size = metadata.len();
         let modified_ns = modified_nanos(&metadata);
-        let path_text = path.to_string_lossy().into_owned();
         let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
 
-        let track = if let Some(cached) = cached.get(&path_text)
+        let track = if let Some(cached) = path.to_str().and_then(|text| cached.get(text))
             && cached.file_size == size
             && cached.modified_ns == modified_ns
         {
@@ -274,7 +278,9 @@ fn scan_library(
             }
         };
 
-        upsert_track(&transaction, &root_text, &track, scan_id)?;
+        if let Some(root_text) = root_text {
+            upsert_track(&transaction, root_text, &track, scan_id)?;
+        }
         tracks.push(track);
         if index % 25 == 0 {
             let _ = events.send(LibraryEvent::Progress {
@@ -284,12 +290,15 @@ fn scan_library(
         }
     }
 
-    transaction
-        .execute(
-            "DELETE FROM tracks WHERE root = ?1 AND last_seen <> ?2",
-            params![root_text, scan_id],
-        )
-        .map_err(|error| format!("无法移除过期音乐索引: {error}"))?;
+    // 2.2.0 存下的有损路径不会再被查到，也就不会更新 last_seen，在这里一并清掉。
+    if let Some(root_text) = root_text {
+        transaction
+            .execute(
+                "DELETE FROM tracks WHERE root = ?1 AND last_seen <> ?2",
+                params![root_text, scan_id],
+            )
+            .map_err(|error| format!("无法移除过期音乐索引: {error}"))?;
+    }
     transaction
         .commit()
         .map_err(|error| format!("无法保存音乐索引: {error}"))?;
@@ -352,6 +361,11 @@ fn upsert_track(
     track: &Track,
     scan_id: i64,
 ) -> Result<(), String> {
+    // 不是 UTF-8 的路径存不成文本，不进索引（见 `scan_library`）。
+    let (Some(path), Some(relative_path)) = (track.path.to_str(), track.relative_path.to_str())
+    else {
+        return Ok(());
+    };
     let duration_ns = track
         .duration
         .map(|duration| duration.as_nanos().min(i64::MAX as u128) as i64);
@@ -375,9 +389,9 @@ fn upsert_track(
                  modified_ns = excluded.modified_ns,
                  last_seen = excluded.last_seen",
             params![
-                track.path.to_string_lossy(),
+                path,
                 root,
-                track.relative_path.to_string_lossy(),
+                relative_path,
                 track.title,
                 track.artist,
                 track.album,
@@ -605,6 +619,120 @@ mod tests {
         let cached = load_cached(&connection, &root.to_string_lossy()).unwrap();
         assert_eq!(cached.len(), 1);
         assert!(!cached.contains_key(&*old.to_string_lossy()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_file_keeps_its_path_after_a_cached_scan() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("music");
+        fs::create_dir_all(&root).unwrap();
+        // 两个文件名转成文本后都是 `song�.wav`，大小和修改时间也相同。
+        let first = root.join(OsStr::from_bytes(b"song\xFF.wav"));
+        let second = root.join(OsStr::from_bytes(b"song\xFE.wav"));
+        let plain = root.join("plain.wav");
+        write_silent_wav(&first, 1);
+        write_silent_wav(&second, 2);
+        write_silent_wav(&plain, 1);
+        let modified = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for path in [&first, &second] {
+            let file = fs::File::options().write(true).open(path).unwrap();
+            file.set_modified(modified).unwrap();
+        }
+        let duration = |path: &Path| {
+            discover_track(path.to_path_buf(), PathBuf::new(), 0, 0)
+                .unwrap()
+                .duration
+        };
+        assert_ne!(duration(&first), duration(&second));
+
+        // 2.2.0 留下的有损记录：路径是 `song�.wav`，大小和修改时间都对得上。
+        let database = temp.path().join("library.sqlite3");
+        let (mut connection, _) = open_database(&database).unwrap();
+        let metadata = fs::metadata(&first).unwrap();
+        let mut stale = discover_track(
+            first.clone(),
+            PathBuf::new(),
+            metadata.len(),
+            modified_nanos(&metadata),
+        )
+        .unwrap();
+        stale.path = PathBuf::from(first.to_string_lossy().into_owned());
+        stale.relative_path = PathBuf::from("song\u{FFFD}.wav");
+        upsert_track(&connection, root.to_str().unwrap(), &stale, 1).unwrap();
+
+        let (events, _receiver) = mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        let scan = |connection: &mut Connection| {
+            let (tracks, warnings) = scan_library(&root, connection, &events, &cancel).unwrap();
+            assert!(warnings.is_empty(), "{warnings:?}");
+            tracks
+                .into_iter()
+                .map(|track| (track.path, track.duration))
+                .collect::<Vec<_>>()
+        };
+        let expected = vec![
+            (plain.clone(), duration(&plain)),
+            (second.clone(), duration(&second)),
+            (first.clone(), duration(&first)),
+        ];
+        assert_eq!(scan(&mut connection), expected);
+        drop(connection);
+        // 重新打开索引，相当于重启后再扫描。
+        let (mut connection, _) = open_database(&database).unwrap();
+        assert_eq!(scan(&mut connection), expected);
+
+        let cached = load_cached(&connection, root.to_str().unwrap()).unwrap();
+        assert_eq!(
+            cached.keys().map(String::as_str).collect::<Vec<_>>(),
+            [plain.to_str().unwrap()]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_library_root_that_is_not_utf8_is_scanned_without_the_cache() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(OsStr::from_bytes(b"music\xFF"));
+        fs::create_dir_all(&root).unwrap();
+        let song = root.join("song.wav");
+        write_silent_wav(&song, 1);
+        let (mut connection, _) = open_database(&temp.path().join("library.sqlite3")).unwrap();
+        // 另一个曲库的目录名转成文本后和它一样，它的记录不能被这次扫描清掉。
+        let lossy_root = root.to_string_lossy().into_owned();
+        let other = Track {
+            path: PathBuf::from(format!("{lossy_root}/other.wav")),
+            relative_path: PathBuf::from("other.wav"),
+            title: "other".to_owned(),
+            artist: None,
+            album: None,
+            duration: None,
+            format: Some("WAV".to_owned()),
+            track_number: None,
+            disc_number: None,
+            file_size: 1,
+            modified_ns: 1,
+        };
+        upsert_track(&connection, &lossy_root, &other, 1).unwrap();
+
+        let (events, _receiver) = mpsc::channel();
+        let cancel = AtomicBool::new(false);
+        for _ in 0..2 {
+            let (tracks, _) = scan_library(&root, &mut connection, &events, &cancel).unwrap();
+            let paths = tracks
+                .into_iter()
+                .map(|track| track.path)
+                .collect::<Vec<_>>();
+            assert_eq!(paths, std::slice::from_ref(&song));
+        }
+        let cached = load_cached(&connection, &lossy_root).unwrap();
+        assert_eq!(cached.into_values().collect::<Vec<_>>(), [other]);
     }
 
     fn write_silent_wav(path: &Path, sample_rate: u32) {
