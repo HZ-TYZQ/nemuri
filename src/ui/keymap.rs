@@ -164,6 +164,14 @@ pub(super) const LIBRARY: &[Binding] = &[
         ],
     ),
     listed(
+        "( / )",
+        "在当前位置设起点 / 终点",
+        &[
+            (ch('('), Action::ToggleRoleHere(Role::Start)),
+            (ch(')'), Action::ToggleRoleHere(Role::End)),
+        ],
+    ),
+    listed(
         "{ / }",
         "上一个 / 下一个跳转点",
         &[(ch('{'), Action::PreviousMark), (ch('}'), Action::NextMark)],

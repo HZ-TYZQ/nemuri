@@ -93,6 +93,12 @@ impl App {
         self.playback.playing_index = Some(index);
         self.playback.origin = origin.clone();
         self.apply_stop();
+        // 曲库播放从中间恢复时，按空格开始放时淡入；片段照它自己的开头和结尾。
+        self.playback.fade_in_from = match &origin {
+            Origin::Library => (!position.is_zero()).then_some(position),
+            Origin::Entry { .. } => None,
+        };
+        self.tick_clip_fade();
         self.view.pending_selected_path = Some(track);
         self.restore_pending_selection();
         if self.config.shuffle {

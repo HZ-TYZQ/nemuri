@@ -83,6 +83,16 @@ the repeat mode, the queue, and the end-of-recording sleep timer take over.
 Seeking onto or past the end point plays on to the real end of the file, and
 seeking back before it stops there again.
 .IP
+Playback fades out over the last 3 seconds before the end point, but not once
+it has gone past it, and not at the end of the file. A recording that opens at
+its start point or at a remembered position, a restored session included,
+fades in over its first second. The fade-in belongs to that opening only:
+playing on through the start point, or jumping to it later, is not faded. The
+fade length is the
+.B clip-fade
+setting (see
+.BR PLAYLISTS ).
+.IP
 The paste box takes a timeline, such as one copied from a video description,
 and adds all its marks at once. Each line gives at most one mark: the first
 time on the line (m:ss, mmm:ss, or h:mm:ss, with optional milliseconds; also
@@ -95,6 +105,16 @@ how many marks it found and how many it will add. Times count from the start of
 the recording, also while a clip plays. On Linux the terminal hands over a
 paste as one block; pasted into the search or a name box it becomes one line,
 and anywhere else it is ignored rather than run as keys.
+.TP
+.BR ( , )
+Make the current position the start or end point of the playing or paused
+recording; pressing it again on the same point clears it. A mark within one
+second of the position is used as it is, name included, otherwise a new mark
+is added there. The rules of s and S in the jump mark panel apply, and when an
+old start or end point turns back into a plain mark, the footer says which.
+Setting a point neither seeks nor changes the volume, and an end point set
+where playback is does not stop the current pass. Disabled while a playlist
+entry plays.
 .TP
 .BR { , }
 Jump to the previous or next jump mark. Within 3 seconds after a mark,
@@ -255,12 +275,13 @@ panel are disabled while one plays.
 A clip that ends before the end of its file fades out over its last 3 seconds,
 and one that starts after 0:00 fades in over its first second, so moving from
 clip to clip neither cuts a sound off nor drops into the next one abruptly.
-Whole entries, clips that run to the end of the file, and library playback are
-not faded, and seeking past a clip's end still moves on at once. The fade
+Whole entries are not faded, a clip that runs to the end of its file does not
+fade out there, and seeking past a clip's end still moves on at once. The fade
 length is the
 .B clip-fade
-setting; 0 turns these fades off. When the sleep timer is fading too, the
-quieter of the two applies.
+setting, which also sets the fades at a recording's start and end points; 0
+turns all of these fades off. When the sleep timer is fading too, the quieter
+of the two applies.
 .PP
 Inside a playlist, J and K move the selected entry, e names it (an empty name
 clears it), d removes it, and s or S picks its start or end from the file's
@@ -284,7 +305,7 @@ playback {
     shuffle #false
     balance 0           // -100 (left only) to 100 (right only)
     swap-channels #false
-    clip-fade 3         // seconds, 0 to 30; 0 turns clip fades off
+    clip-fade 3         // seconds, 0 to 30; 0 means no fades
 }
 sort "artist" descending=#false
 interface {
