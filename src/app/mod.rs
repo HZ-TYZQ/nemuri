@@ -2,6 +2,7 @@
 
 mod action;
 mod catalog;
+mod fade;
 mod folders;
 mod lyrics;
 mod marks;
@@ -37,6 +38,7 @@ use crate::track::Track;
 pub use action::Action;
 pub use catalog::Catalog;
 use marks::Marks;
+pub use marks::PasteSummary;
 use playback::Skip;
 pub use playlists::{Bound, BoundChoice, NewClip};
 use progress::Progress;
@@ -58,6 +60,8 @@ pub enum Overlay {
     Marks,
     /// 给面板里选中的跳转点改名。
     MarkName,
+    /// 把时间轴粘贴进来，一次加好跳转点。
+    PasteMarks,
     /// 把跳转点面板里选中的一段加到哪个播放列表。
     PickPlaylist,
     /// 给列表条目挑开头或结尾。
@@ -262,10 +266,11 @@ impl App {
         }
     }
 
-    /// 随时间推进的状态：睡眠定时和收听进度。与扫描、搜索分开，测试可以只推进时间。
+    /// 随时间推进的状态：睡眠定时、片段淡入淡出和收听进度。与扫描、搜索分开，测试可以只推进时间。
     pub(super) fn tick_timers(&mut self, now: Instant) {
         self.now = now;
         self.tick_sleep();
+        self.tick_clip_fade();
         self.tick_progress();
     }
 

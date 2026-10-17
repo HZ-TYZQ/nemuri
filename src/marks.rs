@@ -77,6 +77,15 @@ pub enum AddError {
     ReadOnly,
 }
 
+/// [`MarkStore::add_all`] 加了哪些、跳过了几个。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AddedMarks {
+    /// 加上的位置（截到毫秒），按给出的顺序。
+    pub added: Vec<Duration>,
+    /// 离已有的跳转点不到 [`SAME_SPOT`]、没有加的个数。
+    pub existing: usize,
+}
+
 #[derive(Serialize, Deserialize)]
 struct RawStore {
     version: u32,
@@ -196,6 +205,45 @@ impl MarkStore {
         );
         self.entries.set(track, Some(marks));
         Ok(index)
+    }
+
+    /// 一次给 `track` 加多个带名字的跳转点（粘贴的时间轴），位置截到毫秒。
+    /// 离已有的跳转点（包括这次先加的）不到 [`SAME_SPOT`] 的不加，也不改已有跳转点的名字。
+    /// 一个也没加时记录不变。
+    pub fn add_all(
+        &mut self,
+        track: &Track,
+        new: &[(Duration, Option<String>)],
+    ) -> Result<AddedMarks, AddError> {
+        if self.read_only {
+            return Err(AddError::ReadOnly);
+        }
+        if track.path.to_str().is_none() {
+            return Err(AddError::UnsupportedPath);
+        }
+        let mut marks = self.marks(&track.path).to_vec();
+        let mut result = AddedMarks::default();
+        for (position, name) in new {
+            let position = Duration::from_millis(millis(*position));
+            if has_mark_near(&marks, position) {
+                result.existing += 1;
+                continue;
+            }
+            let index = marks.partition_point(|mark| mark.position < position);
+            marks.insert(
+                index,
+                Mark {
+                    position,
+                    name: name.clone(),
+                    role: Role::Plain,
+                },
+            );
+            result.added.push(position);
+        }
+        if !result.added.is_empty() {
+            self.entries.set(track, Some(marks));
+        }
+        Ok(result)
     }
 
     /// 删掉 `track` 的第 `index` 个跳转点，返回删掉的那个；删光时整条记录删掉。
@@ -353,6 +401,16 @@ fn millis(duration: Duration) -> u64 {
 }
 
 /// 时长以内的跳转点。文件被剪短后，超出时长的跳转点留着，但不显示也不参与跳转。
+/// 按位置排好的 `marks` 里有没有离 `position` 不到 [`SAME_SPOT`] 的。只看紧挨着它两边的两个。
+pub fn has_mark_near(marks: &[Mark], position: Duration) -> bool {
+    let index = marks.partition_point(|mark| mark.position < position);
+    [index.checked_sub(1), Some(index)]
+        .into_iter()
+        .flatten()
+        .filter_map(|index| marks.get(index))
+        .any(|mark| mark.position.abs_diff(position) < SAME_SPOT)
+}
+
 pub fn within(marks: &[Mark], duration: Duration) -> &[Mark] {
     &marks[..marks.partition_point(|mark| mark.position < duration)]
 }
@@ -486,6 +544,66 @@ mod tests {
             .add(&track, Duration::from_nanos(754_250_999_999))
             .unwrap();
         assert_eq!(positions(&store, &track), [Duration::from_millis(754_250)]);
+    }
+
+    #[test]
+    fn several_named_marks_are_added_at_once_beside_the_existing_ones() {
+        let track = recording("/m/a.flac");
+        let mut store = MarkStore::default();
+        store.add(&track, 10 * MINUTE).unwrap();
+        let pasted = [
+            (20 * MINUTE, Some("耳语".to_owned())),
+            // 离已有的不到 1 秒：不加，也不给它起名字。
+            (
+                10 * MINUTE + Duration::from_millis(500),
+                Some("掏耳".to_owned()),
+            ),
+            (Duration::from_nanos(300_000_999_999), None),
+        ];
+        assert_eq!(
+            store.add_all(&track, &pasted),
+            Ok(AddedMarks {
+                added: vec![20 * MINUTE, 5 * MINUTE],
+                existing: 1,
+            })
+        );
+        assert_eq!(
+            store.marks(&track.path),
+            [
+                at(5),
+                at(10),
+                Mark {
+                    name: Some("耳语".to_owned()),
+                    ..at(20)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_mark_near_a_position_is_found_on_either_side() {
+        let marks = [at(5), at(10)];
+        assert!(has_mark_near(
+            &marks,
+            10 * MINUTE - Duration::from_millis(999)
+        ));
+        assert!(has_mark_near(
+            &marks,
+            5 * MINUTE + Duration::from_millis(500)
+        ));
+        assert!(has_mark_near(&marks, 10 * MINUTE));
+        assert!(!has_mark_near(&marks, 10 * MINUTE + SECOND));
+        assert!(!has_mark_near(&marks, Duration::ZERO));
+        assert!(!has_mark_near(&marks, 7 * MINUTE));
+        assert!(!has_mark_near(&[], 7 * MINUTE));
+    }
+
+    #[test]
+    fn adding_nothing_new_leaves_the_records_alone() {
+        let track = recording("/m/a.flac");
+        let mut store = MarkStore::default();
+        assert_eq!(store.add_all(&track, &[]), Ok(AddedMarks::default()));
+        assert!(store.entries.is_empty());
     }
 
     #[test]
@@ -852,6 +970,10 @@ mod tests {
         odd.path = PathBuf::from(OsStr::from_bytes(b"/m/non-utf8-\xFF.flac"));
         let mut store = MarkStore::default();
         assert_eq!(store.add(&odd, 5 * MINUTE), Err(AddError::UnsupportedPath));
+        assert_eq!(
+            store.add_all(&odd, &[(5 * MINUTE, None)]),
+            Err(AddError::UnsupportedPath)
+        );
         assert!(store.entries.is_empty());
     }
 
@@ -943,6 +1065,10 @@ mod tests {
             let (mut store, message) = MarkStore::load(&path);
             assert!(message.unwrap().contains("本次运行不保存跳转点"));
             assert_eq!(store.add(&track, 5 * MINUTE), Err(AddError::ReadOnly));
+            assert_eq!(
+                store.add_all(&track, &[(5 * MINUTE, None)]),
+                Err(AddError::ReadOnly)
+            );
             store.save(&path).unwrap();
             fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
             assert_eq!(fs::read_to_string(&path).unwrap(), SAVED);

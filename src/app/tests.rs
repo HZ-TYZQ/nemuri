@@ -13,7 +13,7 @@ use crate::track::{Folder, RepeatMode, SortKey, Track};
 use crate::ui::{MouseInput, ViewLayout};
 
 use super::playback::short_reason;
-use super::{Action, App, BagUpdate, Overlay};
+use super::{Action, App, BagUpdate, Overlay, PasteSummary};
 
 /// 装着假后端的 App；临时目录里有一个空的 music 子目录作曲库。
 fn test_app(config: AppConfig) -> (tempfile::TempDir, App) {
@@ -445,6 +445,51 @@ fn visualizer_key_does_not_escape_search_or_overlay_modes() {
     );
     assert!(app.config.visualizer_enabled);
     assert_eq!(app.view.overlay, Overlay::Help);
+}
+
+#[test]
+fn a_paste_goes_into_the_focused_input_as_one_line() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.view.search_active = true;
+    app.dispatch(Action::Paste("耳语\r\n掏耳\t安静\n".to_owned()));
+    assert_eq!(app.catalog.query(), "耳语 掏耳 安静");
+
+    app.view.search_active = false;
+    app.view.overlay = Overlay::NameInput;
+    app.view.name_input = "睡前".to_owned();
+    app.dispatch(Action::Paste(" 列表\n\n".to_owned()));
+    assert_eq!(app.view.name_input, "睡前 列表");
+}
+
+#[test]
+fn a_paste_outside_an_input_is_not_run_as_shortcuts() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    let visualizer = app.config.visualizer_enabled;
+    app.dispatch(Action::Paste("v/q".to_owned()));
+    assert!(!app.should_quit());
+    assert_eq!(app.config.visualizer_enabled, visualizer);
+    assert!(!app.view.search_active);
+    assert_eq!(app.catalog.query(), "");
+}
+
+#[test]
+fn control_keys_are_not_typed_into_an_input() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.view.search_active = true;
+    press(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(app.catalog.query(), "");
+    // Windows 上 AltGr 打出的字符带着 Ctrl 和 Alt，仍是输入。
+    press(
+        &mut app,
+        KeyEvent::new(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ),
+    );
+    assert_eq!(app.catalog.query(), "@");
 }
 
 /// 帮助弹层所在的各行：去掉最后一行底栏，底栏的提示里也有“q 退出”。
@@ -3264,18 +3309,21 @@ fn mark_keys_only_explain_themselves_without_a_playing_long_recording() {
     }
     assert!(!temp.path().join("data/nemuri/marks.json").exists());
 
-    // 没有跳转点的长录音：不打开面板，往前也不会跳回开头。
+    // 没有跳转点的长录音：往前也不会跳回开头；B 打开空面板，好在里面粘贴时间轴。
     app.play_index(0, true, BagUpdate::Reanchor).unwrap();
     assert!(app.playback.player.seek_to(AT_12_34));
-    for character in ['B', '{', '}'] {
+    for character in ['{', '}'] {
         press(&mut app, key(KeyCode::Char(character)));
         assert_eq!(
             app.view.message.as_deref(),
-            Some("这首还没有跳转点，按 b 在当前位置添加")
+            Some("这首还没有跳转点：b 在当前位置添加，或在 B 里粘贴时间轴")
         );
         assert_eq!(app.view.overlay, Overlay::None);
         assert_eq!(app.player().position(), AT_12_34);
     }
+    press(&mut app, key(KeyCode::Char('B')));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(app.player().position(), AT_12_34);
 }
 
 #[test]
@@ -3352,13 +3400,13 @@ fn the_marks_panel_jumps_renames_and_deletes() {
     press(&mut app, key(KeyCode::Enter));
     assert_eq!(app.current_marks()[2].name, None);
 
-    // 删除不再确认；光标留在范围内，删光时关掉面板。
+    // 删除不再确认；光标留在范围内，删光时面板留着，变成空面板。
     press(&mut app, key(KeyCode::Char('d')));
     assert_eq!(app.view.message.as_deref(), Some("已删除跳转点 15:00"));
     assert_eq!(app.view.marks_selected, 1);
     press(&mut app, key(KeyCode::Char('d')));
     press(&mut app, key(KeyCode::Char('d')));
-    assert_eq!(app.view.overlay, Overlay::None);
+    assert_eq!(app.view.overlay, Overlay::Marks);
     assert_eq!(
         app.view.message.as_deref(),
         Some("已删除最后一个跳转点 5:00")
@@ -3441,8 +3489,9 @@ fn the_marks_panel_lists_times_names_and_the_current_section() {
     assert!(
         screen
             .iter()
-            .any(|row| row.contains("Enter跳到这里·a加入列表·s/S起点/终点·e改名·d删除·Esc关闭"))
+            .any(|row| row.contains("Enter跳到这里·a加入列表·s/S起点/终点·e改名·d删除"))
     );
+    assert!(screen.iter().any(|row| row.contains("v粘贴时间轴·Esc关闭")));
 
     press(&mut app, key(KeyCode::Char('e')));
     let (_, backend) = render(&app, 100, 30);
@@ -3452,6 +3501,251 @@ fn the_marks_panel_lists_times_names_and_the_current_section() {
         "{screen}"
     );
     assert!(screen.contains(">掏耳█"), "{screen}");
+}
+
+/// 在跳转点面板里按 v，把 `text` 当作一整段粘贴进去（Linux 上终端这样送来）。
+fn paste_timeline(app: &mut App, text: &str) {
+    press(app, key(KeyCode::Char('v')));
+    app.dispatch(Action::Paste(text.to_owned()));
+}
+
+fn ctrl(character: char) -> KeyEvent {
+    KeyEvent::new(KeyCode::Char(character), KeyModifiers::CONTROL)
+}
+
+fn named_marks(app: &App) -> Vec<(Duration, Option<String>)> {
+    app.current_marks()
+        .iter()
+        .map(|mark| (mark.position, mark.name.clone()))
+        .collect()
+}
+
+#[test]
+fn a_pasted_timeline_adds_named_marks_in_one_go() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    // 20 分钟的录音，5:00 已有一个跳转点。
+    marks_fixture(&mut app, &temp.path().join("music"), &[5], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    paste_timeline(
+        &mut app,
+        "时间轴：\r\n00:00 开场\r\n05:00.4 重复\r\n12:34 掏耳\r\n30:00 超出\r\n",
+    );
+    assert_eq!(app.view.overlay, Overlay::PasteMarks);
+    assert_eq!(
+        app.paste_summary(),
+        PasteSummary {
+            recognized: 4,
+            new: 2,
+            existing: 1,
+            beyond: 1,
+        }
+    );
+
+    press(&mut app, ctrl('s'));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已添加 2 个跳转点（1 个已有，1 个超出时长）")
+    );
+    assert_eq!(
+        named_marks(&app),
+        [
+            (Duration::ZERO, Some("开场".to_owned())),
+            (5 * MINUTE, None),
+            (AT_12_34, Some("掏耳".to_owned())),
+        ]
+    );
+    // 光标落在新加的最早的一个上；改了就写盘。
+    assert_eq!(app.view.marks_selected, 0);
+    let saved = std::fs::read_to_string(temp.path().join("data/nemuri/marks.json")).unwrap();
+    assert!(saved.contains("掏耳"), "{saved}");
+
+    // 再开粘贴框时是空的。
+    press(&mut app, key(KeyCode::Char('v')));
+    assert!(app.view.paste_text.is_empty());
+}
+
+#[test]
+fn the_paste_box_takes_typed_lines_and_stays_open_until_something_can_be_added() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    press(&mut app, key(KeyCode::Char('v')));
+    // Windows 上的粘贴逐键送来：Enter 是换行，不是确定。
+    type_text(&mut app, "随便写点");
+    press(&mut app, key(KeyCode::Enter));
+    assert_eq!(app.view.overlay, Overlay::PasteMarks);
+    press(&mut app, ctrl('s'));
+    assert_eq!(app.view.overlay, Overlay::PasteMarks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("没有认出时间，每行写成 03:21 名字")
+    );
+
+    type_text(&mut app, "1:00:00 超出了");
+    press(&mut app, key(KeyCode::Backspace));
+    assert_eq!(app.view.paste_text, "随便写点\n1:00:00 超出");
+    press(&mut app, ctrl('s'));
+    assert_eq!(app.view.overlay, Overlay::PasteMarks);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("没有新的跳转点：1 个超出时长")
+    );
+
+    // Esc 回到面板，什么也没加，内容不留。
+    press(&mut app, key(KeyCode::Esc));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert!(app.current_marks().is_empty());
+    assert!(app.view.paste_text.is_empty());
+}
+
+#[test]
+fn the_paste_box_reparses_only_when_its_text_changes() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    paste_timeline(&mut app, "03:00 a\n04:00 b");
+    assert_eq!(app.view.paste_parsed.len(), 2);
+    // 退格删掉第二行，识别结果跟着变。
+    for _ in 0.."\n04:00 b".chars().count() {
+        press(&mut app, key(KeyCode::Backspace));
+    }
+    assert_eq!(app.view.paste_text, "03:00 a");
+    assert_eq!(app.view.paste_parsed.len(), 1);
+
+    // 已有的跳转点变了，摘要现查，跟着变。
+    let track = app.catalog.tracks()[0].clone();
+    app.marks.store.add(&track, 3 * MINUTE).unwrap();
+    assert_eq!(
+        app.paste_summary(),
+        PasteSummary {
+            recognized: 1,
+            new: 0,
+            existing: 1,
+            beyond: 0,
+        }
+    );
+    press(&mut app, key(KeyCode::Esc));
+    assert!(app.view.paste_parsed.is_empty());
+}
+
+#[test]
+fn a_paste_longer_than_the_limit_keeps_only_the_start() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    paste_timeline(&mut app, &"耳".repeat(30_000));
+    // 64 KiB 里放得下 21845 个三字节的字，不会切在一个字的中间。
+    assert_eq!(app.view.paste_text.chars().count(), 21_845);
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("内容太长，只保留了前面的部分")
+    );
+}
+
+#[test]
+fn a_timeline_pasted_while_a_clip_plays_uses_the_recording_time() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    press(&mut app, key(KeyCode::Char('B')));
+    assert_eq!(app.view.overlay, Overlay::Marks);
+
+    paste_timeline(&mut app, "02:00 开头之前\n06:00 片段里\n16:00 结尾之后");
+    press(&mut app, ctrl('s'));
+    assert_eq!(
+        app.view.message.as_deref(),
+        Some("已添加 3 个跳转点（其中 2 个在这一段之外）")
+    );
+    // 面板只列片段里的。
+    assert_eq!(mark_positions(&app), [6 * MINUTE]);
+    assert_eq!(app.view.marks_selected, 0);
+}
+
+#[test]
+fn the_paste_box_keeps_its_recording_when_the_track_changes() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    let paths = marks_fixture(&mut app, &temp.path().join("music"), &[], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    paste_timeline(&mut app, "03:00 掏耳");
+
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(app.view.overlay, Overlay::PasteMarks);
+    press(&mut app, ctrl('s'));
+    assert_eq!(app.marks.store.marks(&paths[0]).len(), 1);
+    // 回到的面板是现在这一首的，它还没有跳转点。
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    assert!(app.current_marks().is_empty());
+}
+
+#[test]
+fn the_empty_panel_ignores_row_keys_and_closes_only_for_a_short_track() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    for code in [
+        KeyCode::Enter,
+        KeyCode::Char('a'),
+        KeyCode::Char('s'),
+        KeyCode::Char('S'),
+        KeyCode::Char('e'),
+        KeyCode::Char('d'),
+        KeyCode::Char('j'),
+    ] {
+        press(&mut app, key(code));
+        assert_eq!(app.view.overlay, Overlay::Marks, "{code:?}");
+    }
+    assert_eq!(app.player().position(), 2 * MINUTE);
+
+    // 换到另一个长录音还是空面板；换到短的歌用不了跳转点，关掉面板。
+    app.dispatch(Action::Next);
+    assert_eq!(app.view.overlay, Overlay::Marks);
+    app.dispatch(Action::Next);
+    assert_eq!(app.playback.playing_index, Some(2));
+    assert_eq!(app.view.overlay, Overlay::None);
+}
+
+#[test]
+fn the_empty_panel_and_the_paste_box_explain_themselves() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[5], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    press(&mut app, key(KeyCode::Char('d')));
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend);
+    assert!(
+        screen
+            .iter()
+            .any(|row| row.contains("还没有跳转点：b在当前位置添加，v粘贴时间轴")),
+        "{screen:#?}"
+    );
+
+    press(&mut app, key(KeyCode::Char('v')));
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    assert!(screen.contains("粘贴时间轴·rec1"), "{screen}");
+    assert!(
+        screen.contains("█每行一个时间和名字，例如03:21掏耳"),
+        "{screen}"
+    );
+    assert!(screen.contains("还没有认出时间"), "{screen}");
+    assert!(screen.contains("Ctrl+S添加·Esc取消"), "{screen}");
+
+    // 放不下时显示最后几行，光标在末尾。
+    let timeline: Vec<String> = (1..=30)
+        .map(|minute| format!("{minute}:00 第{minute}段"))
+        .collect();
+    app.dispatch(Action::Paste(timeline.join("\n")));
+    let (_, backend) = render(&app, 100, 30);
+    let screen = screen_rows(&backend).join("\n");
+    assert!(screen.contains("30:00第30段█"), "{screen}");
+    assert!(!screen.contains("1:00第1段"), "{screen}");
+    assert!(
+        screen.contains("认出30个：新增19个·11个超出时长"),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -4020,7 +4314,11 @@ fn the_marks_panel_tags_the_start_and_end_points_and_keeps_the_whole_hint() {
     assert!(
         screen
             .iter()
-            .any(|row| row.contains("Enter跳到这里·a加入列表·s/S起点/终点·e改名·d删除·Esc关闭")),
+            .any(|row| row.contains("Enter跳到这里·a加入列表·s/S起点/终点·e改名·d删除")),
+        "{screen:#?}"
+    );
+    assert!(
+        screen.iter().any(|row| row.contains("v粘贴时间轴·Esc关闭")),
         "{screen:#?}"
     );
 
@@ -4494,6 +4792,161 @@ fn add_clips(app: &mut App, entries: &[(usize, u32, Option<u32>, Option<&str>)])
 }
 
 const SECOND: Duration = Duration::from_secs(1);
+
+/// 跳到文件时间 `position` 再走一个 tick，返回交给播放器的淡出增益。
+fn gain_at(app: &mut App, control: &FakeControl, position: Duration) -> f32 {
+    assert!(app.playback.player.seek_to(position));
+    app.tick_timers(app.now);
+    control.fade_gain()
+}
+
+const HALF_SECOND: Duration = Duration::from_millis(500);
+
+#[test]
+fn a_clip_cut_from_the_middle_fades_out_and_the_next_one_fades_in() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None), (1, 2, Some(4), None)]);
+
+    // 装载之前就设好了：从中间开始的片段从无声开始，不会先漏出一下原音量。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(control.fade_gain(), 0.0);
+    // 默认淡出 3 秒，淡入 1 秒。
+    assert_eq!(gain_at(&mut app, &control, 5 * MINUTE + HALF_SECOND), 0.25);
+    assert_eq!(gain_at(&mut app, &control, 5 * MINUTE + SECOND), 1.0);
+    assert_eq!(gain_at(&mut app, &control, 10 * MINUTE), 1.0);
+    assert_eq!(
+        gain_at(&mut app, &control, 15 * MINUTE - SECOND - HALF_SECOND),
+        0.25
+    );
+    // 暂停时停在当时的音量。
+    press(&mut app, key(KeyCode::Char(' ')));
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 0.25);
+    press(&mut app, key(KeyCode::Char(' ')));
+
+    // 淡出到一半按 n：立刻换，下一条按它自己的开头从无声淡入，不停在上一条的值。
+    press(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.fade_gain(), 0.0);
+    assert_eq!(gain_at(&mut app, &control, 2 * MINUTE + SECOND), 1.0);
+}
+
+#[test]
+fn whole_entries_clips_to_the_file_end_and_library_tracks_keep_full_volume() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(2, 0, None, None), (1, 18, None, None)]);
+
+    // 整首条目：开头和结尾都不淡。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(gain_at(&mut app, &control, Duration::from_secs(99)), 1.0);
+    // 放到文件结尾的片段：开头淡入，结尾不淡出。
+    play_from_playlist(&mut app, 1);
+    assert_eq!(control.fade_gain(), 0.0);
+    assert_eq!(gain_at(&mut app, &control, 20 * MINUTE - SECOND), 1.0);
+    // 曲库播放：不淡。
+    play_library_row(&mut app, 0);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(gain_at(&mut app, &control, 20 * MINUTE - SECOND), 1.0);
+}
+
+#[test]
+fn a_zero_clip_fade_turns_clip_fades_off() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        clip_fade: Duration::ZERO,
+        ..AppConfig::default()
+    });
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(gain_at(&mut app, &control, 15 * MINUTE - SECOND), 1.0);
+}
+
+#[test]
+fn with_the_sleep_timer_the_quieter_fade_wins() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    sleep_at_track_end(&mut app);
+
+    // 离片段结尾 15 秒：只有睡眠定时在淡出（30 秒淡到一半）。
+    assert_eq!(gain_at(&mut app, &control, 15 * MINUTE - 15 * SECOND), 0.25);
+    // 离结尾 1.5 秒：两个都在淡，取较小的那个，不相乘。
+    let sleep = 1.5_f32 / 30.0;
+    assert_eq!(
+        gain_at(&mut app, &control, 15 * MINUTE - SECOND - HALF_SECOND),
+        sleep * sleep
+    );
+}
+
+#[test]
+fn the_volume_comes_back_once_the_playlist_has_finished() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    assert!(gain_at(&mut app, &control, 15 * MINUTE - HALF_SECOND / 5) < 0.01);
+
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 1.0);
+}
+
+#[test]
+fn a_clip_that_fails_to_load_leaves_the_playing_one_audible() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None), (1, 2, Some(4), None)]);
+    play_from_playlist(&mut app, 0);
+    press(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(gain_at(&mut app, &control, 3 * MINUTE), 1.0);
+
+    // p 退回上一条，它从中间开始，文件却没了：还在放的这一条在装载期间和之后都没被压到无声。
+    std::fs::remove_file(&paths[0]).unwrap();
+    press(&mut app, key(KeyCode::Char('p')));
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.gain_when_loading(), Some(1.0));
+    assert_eq!(control.fade_gain(), 1.0);
+}
+
+#[test]
+fn a_fading_clip_keeps_its_volume_until_the_next_source_takes_over() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None), (1, 2, Some(4), None)]);
+    let fading = 15 * MINUTE - SECOND - HALF_SECOND;
+
+    // 淡出到 0.25 时点播曲库里的歌：装载期间旧的仍是 0.25，新的从满音量开始。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    play_library_row(&mut app, 2);
+    assert_eq!(app.playback.playing_index, Some(2));
+    assert_eq!(control.gain_when_loading(), Some(0.25));
+    assert_eq!(control.gain_when_resumed(), Some(1.0));
+
+    // 换到从中间开始的片段：旧的不会先被压到无声，新的从无声开始。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    press(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.gain_when_loading(), Some(0.25));
+    assert_eq!(control.gain_when_resumed(), Some(0.0));
+
+    // 装载失败：旧的音量自始至终不变。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    std::fs::remove_file(&paths[2]).unwrap();
+    play_library_row(&mut app, 2);
+    assert_eq!(app.playback.playing_index, Some(0));
+    assert_eq!(control.gain_when_loading(), Some(0.25));
+    assert_eq!(control.fade_gain(), 0.25);
+}
 
 #[test]
 fn a_clip_plays_in_its_own_time_from_its_start_to_its_end() {

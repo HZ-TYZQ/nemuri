@@ -140,7 +140,8 @@ impl App {
             Origin::Library => (self.opening(index), false),
             Origin::Entry { range, .. } => (Opening::Clip(range.start), true),
         };
-        match self.load_track(&path, autoplay, opening.position(), exact) {
+        let clip_gain = self.starting_clip_gain(&origin);
+        match self.load_track(&path, autoplay, opening.position(), exact, clip_gain) {
             Ok(opened_at) => {
                 self.playback.loads += 1;
                 self.start_playthrough();
@@ -184,32 +185,38 @@ impl App {
     /// 装载曲目：`start` 有值时从那里开始，播放中切歌时接着播放、暂停中只装载。
     /// 从中间装载失败（例如文件被剪短）时退回从头装载；`exact` 时不退回，直接报错。
     /// 返回实际开始的位置，从头时为 None。
+    ///
+    /// 总是先暂停着装载，再设上新的一项的片段增益 `clip_gain`，然后才开始放。
+    /// 播放器打开和解码新文件时旧的还在出声，装载完成时才换下它；先设增益的话，
+    /// 旧的那一条会突然变响或没声。装载失败时增益不变，旧的照常放。
     fn load_track(
         &mut self,
         path: &Path,
         autoplay: bool,
         start: Option<Duration>,
         exact: bool,
+        clip_gain: f32,
     ) -> Result<Option<Duration>, String> {
         let player = &mut self.playback.player;
-        if let Some(position) = start {
-            match player.open_at(path, position) {
-                Ok(()) => {
-                    if autoplay {
-                        player.resume();
-                    }
-                    return Ok(Some(position));
-                }
+        let opened = match start {
+            Some(position) => match player.open_at(path, position) {
+                Ok(()) => Some(position),
                 Err(error) if exact => return Err(error),
-                Err(_) => {}
+                Err(_) => {
+                    player.open(path)?;
+                    None
+                }
+            },
+            None => {
+                player.open(path)?;
+                None
             }
-        }
+        };
+        self.set_clip_gain(clip_gain);
         if autoplay {
-            player.play(path)
-        } else {
-            player.open(path)
+            self.playback.player.resume();
         }
-        .map(|()| None)
+        Ok(opened)
     }
 
     pub(super) fn play_path(

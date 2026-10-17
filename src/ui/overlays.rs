@@ -8,13 +8,14 @@ use ratatui::widgets::{Block, BorderType, Clear, List, ListItem, Paragraph, Wrap
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::{App, Bound, BoundChoice, Overlay};
-use crate::marks::Role;
+use crate::marks::{Mark, Role};
 use crate::theme::Theme;
+use crate::timeline_text;
 use crate::track::Track;
 
 use super::keymap::{
     self, DELETE_CONFIRM, ENTRY_BOUND, ENTRY_NAME, FOLDERS, HELP, MARK_NAME, MARKS, NAME_INPUT,
-    PICK_PLAYLIST, PLAYLIST_TRACKS, PLAYLISTS, QUEUE,
+    PASTE_MARKS, PICK_PLAYLIST, PLAYLIST_TRACKS, PLAYLISTS, QUEUE,
 };
 use super::text::{fmt_duration, now_playing_text, truncate_display};
 use super::{ListView, ViewLayout};
@@ -42,6 +43,7 @@ pub(super) fn draw_overlay(frame: &mut Frame, app: &App, theme: &Theme, layout: 
         Overlay::PlaylistTracks => draw_playlist_tracks(frame, app, theme, view),
         Overlay::Folders => draw_folders(frame, app, theme, view),
         Overlay::Marks => draw_marks(frame, app, theme, view),
+        Overlay::PasteMarks => draw_paste_marks(frame, app, theme),
         Overlay::PickPlaylist => {
             draw_playlist_list(frame, app, theme, view, " 加到播放列表 ", PICK_PLAYLIST);
         }
@@ -168,7 +170,7 @@ fn draw_playlist_list(
             .collect()
     };
     // 与队列面板一致：列表只用提示行以上的空间，点击行与显示行才能一一对应。
-    let (inner, viewport) = list_viewport(area, &block);
+    let (inner, viewport) = list_viewport(area, &block, 1);
     frame.render_widget(block, area);
     let list = List::new(items)
         .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
@@ -176,7 +178,7 @@ fn draw_playlist_list(
     let selected = (!app.playlists().all().is_empty()).then_some(app.view().playlist_selected);
     frame.render_stateful_widget(list, viewport, view.state_for(selected));
     view.record(viewport, app.playlists().all().len());
-    let help = help_row(inner);
+    let help = hint_rows(inner, 1);
     frame.render_widget(
         Paragraph::new(keymap::hints(bindings)).style(Style::new().fg(theme.muted)),
         help,
@@ -286,7 +288,7 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut 
                 Span::styled(right.as_str(), Style::new().fg(theme.muted)),
             ]))
         });
-    let (inner, viewport) = list_viewport(area, &block);
+    let (inner, viewport) = list_viewport(area, &block, 1);
     frame.render_widget(block, area);
     let list = List::new(items)
         .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
@@ -294,7 +296,7 @@ fn draw_playlist_tracks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut 
     let selected = (!playlist.entries.is_empty()).then_some(app.view().playlist_track_selected);
     frame.render_stateful_widget(list, viewport, view.state_for(selected));
     view.record(viewport, playlist.entries.len());
-    let help = help_row(inner);
+    let help = hint_rows(inner, 1);
     frame.render_widget(
         Paragraph::new(keymap::hints(PLAYLIST_TRACKS)).style(Style::new().fg(theme.muted)),
         help,
@@ -404,7 +406,7 @@ fn draw_entry_bound(frame: &mut Frame, app: &App, theme: &Theme, view: &mut List
         ListItem::new(Line::from(spans))
     });
 
-    let (inner, viewport) = list_viewport(area, &block);
+    let (inner, viewport) = list_viewport(area, &block, 1);
     frame.render_widget(block, area);
     let list = List::new(items)
         .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
@@ -415,7 +417,7 @@ fn draw_entry_bound(frame: &mut Frame, app: &App, theme: &Theme, view: &mut List
         view.state_for(Some(app.view().bound_selected)),
     );
     view.record(viewport, choices.len());
-    let help = help_row(inner);
+    let help = hint_rows(inner, 1);
     frame.render_widget(
         Paragraph::new(keymap::hints(ENTRY_BOUND)).style(Style::new().fg(theme.muted)),
         help,
@@ -529,7 +531,7 @@ fn draw_queue(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         });
 
     // 列表只用底部提示行以上的空间，长队列不会有条目被提示行盖住。
-    let (inner, viewport) = list_viewport(area, &block);
+    let (inner, viewport) = list_viewport(area, &block, 1);
     frame.render_widget(block, area);
     let list = List::new(items)
         .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
@@ -540,7 +542,7 @@ fn draw_queue(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         view.state_for(Some(app.view().queue_selected)),
     );
     view.record(viewport, app.playback().queue.len());
-    let help = help_row(inner);
+    let help = hint_rows(inner, 1);
     frame.render_widget(
         Paragraph::new(keymap::hints(QUEUE)).style(Style::new().fg(theme.muted)),
         help,
@@ -592,7 +594,7 @@ fn draw_folders(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView
         ]))
     });
 
-    let (inner, viewport) = list_viewport(area, &block);
+    let (inner, viewport) = list_viewport(area, &block, 1);
     frame.render_widget(block, area);
     let list = List::new(items)
         .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
@@ -603,7 +605,7 @@ fn draw_folders(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView
         view.state_for(Some(app.view().folder_selected)),
     );
     view.record(viewport, rows);
-    let help = help_row(inner);
+    let help = hint_rows(inner, 1);
     frame.render_widget(
         Paragraph::new(keymap::hints(FOLDERS)).style(Style::new().fg(theme.muted)),
         help,
@@ -611,15 +613,20 @@ fn draw_folders(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView
 }
 
 /// 当前曲目的跳转点，每行是右对齐的时间和名字，当前所在段用 ● 标出，
-/// 起点和终点在名字后面用暗色注明。
+/// 起点和终点在名字后面用暗色注明。还没有跳转点时只有一行说明。
+/// 提示一行放不下时分成两行。
 fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) {
     let marks = app.current_marks();
-    if marks.is_empty() {
-        view.clear();
-        return;
-    }
-    // 列表行、上下边框和提示行；76 列放得下整行提示。
-    let area = centered(frame.area(), 76, (marks.len() as u16).saturating_add(3));
+    let width = centered(frame.area(), 76, 0).width;
+    // 提示行从左边框后空一列开始，见 `hint_rows`。
+    let hints = keymap::hint_lines(MARKS, usize::from(width).saturating_sub(3));
+    let hint_count = hints.len() as u16;
+    let rows = marks.len().max(1) as u16;
+    let area = centered(
+        frame.area(),
+        76,
+        rows.saturating_add(2).saturating_add(hint_count),
+    );
     frame.render_widget(Clear, area);
     let prefix = " 跳转点 · ";
     let title_width = usize::from(area.width)
@@ -637,6 +644,36 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         ))
         .border_style(Style::new().fg(theme.border));
 
+    let (inner, viewport) = list_viewport(area, &block, hint_count);
+    frame.render_widget(block, area);
+    if marks.is_empty() {
+        let note = Rect {
+            x: viewport.x + 1,
+            width: viewport.width.saturating_sub(1),
+            ..viewport
+        };
+        frame.render_widget(
+            Paragraph::new(app.empty_marks_note()).style(Style::new().fg(theme.muted)),
+            note,
+        );
+        view.record(viewport, 0);
+    } else {
+        draw_mark_rows(frame, app, theme, view, marks, viewport);
+    }
+    frame.render_widget(
+        Paragraph::new(hints.join("\n")).style(Style::new().fg(theme.muted)),
+        hint_rows(inner, hint_count),
+    );
+}
+
+fn draw_mark_rows(
+    frame: &mut Frame,
+    app: &App,
+    theme: &Theme,
+    view: &mut ListView,
+    marks: &[Mark],
+    viewport: Rect,
+) {
     let current = app.current_section();
     // 放片段时按片段内的时间显示，和进度条一致。
     let time_width = marks
@@ -644,9 +681,9 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         .map(|mark| fmt_duration(app.shown(mark.position)).len())
         .max()
         .unwrap_or_default();
-    // 去掉左右边框、highlight_symbol、标记、时间和时间后的两列间隔。
-    let name_width = usize::from(area.width)
-        .saturating_sub(2 + 2 + 2 + time_width + 2)
+    // 去掉 highlight_symbol、标记、时间和时间后的两列间隔。
+    let name_width = usize::from(viewport.width)
+        .saturating_sub(2 + 2 + time_width + 2)
         .max(1);
     let items = marks.iter().enumerate().map(|(index, mark)| {
         let marker = if current == Some(index) { "● " } else { "  " };
@@ -679,9 +716,6 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         }
         ListItem::new(Line::from(spans))
     });
-
-    let (inner, viewport) = list_viewport(area, &block);
-    frame.render_widget(block, area);
     let list = List::new(items)
         .highlight_symbol(Span::styled("▸ ", Style::new().fg(theme.primary)))
         .highlight_style(Style::new().bg(theme.selection_bg).bold());
@@ -691,10 +725,102 @@ fn draw_marks(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) 
         view.state_for(Some(app.view().marks_selected)),
     );
     view.record(viewport, marks.len());
-    let help = help_row(inner);
+}
+
+/// 粘贴框：原文放不下时显示最后几行，能认出时间的行正常显示、认不出的用暗色；
+/// 下面一行是识别结果，最后一行是按键提示。
+fn draw_paste_marks(frame: &mut Frame, app: &App, theme: &Theme) {
+    let area = centered(frame.area(), 76, 18);
+    frame.render_widget(Clear, area);
+    let prefix = " 粘贴时间轴 · ";
+    let title_width = usize::from(area.width)
+        .saturating_sub(2 + 2 + UnicodeWidthStr::width(prefix) + 1)
+        .max(1);
+    let title = app
+        .paste_track()
+        .map(|track| truncate_display(track.display_title(), title_width))
+        .unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(Span::styled(
+            format!("{prefix}{title} "),
+            Style::new().fg(theme.primary).bold(),
+        ))
+        .border_style(Style::new().fg(theme.border));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let primary = Style::new().fg(theme.primary);
+    let muted = Style::new().fg(theme.muted);
+    // 原文下面还有识别结果和提示两行。
+    let text_rows = inner.height.saturating_sub(2);
+    // 留一列给光标。
+    let width = usize::from(inner.width).saturating_sub(2);
+    let text = &app.view().paste_text;
+    let lines: Vec<Line> = if text.is_empty() {
+        vec![Line::from(vec![
+            Span::styled("█", primary),
+            Span::styled(" 每行一个时间和名字，例如 03:21 掏耳", muted),
+        ])]
+    } else {
+        let all: Vec<&str> = text.split('\n').collect();
+        let last = all.len() - 1;
+        all.iter()
+            .enumerate()
+            .skip(all.len().saturating_sub(usize::from(text_rows)))
+            .map(|(index, line)| {
+                // 制表符之类的控制字符画出来会错位，换成空格。
+                let shown: String = line
+                    .chars()
+                    .map(|character| {
+                        if character.is_control() {
+                            ' '
+                        } else {
+                            character
+                        }
+                    })
+                    .collect();
+                let style = if timeline_text::recognizes(line) {
+                    primary
+                } else {
+                    muted
+                };
+                let mut spans = vec![Span::styled(truncate_display(&shown, width), style)];
+                if index == last {
+                    spans.push(Span::styled("█", primary));
+                }
+                Line::from(spans)
+            })
+            .collect()
+    };
     frame.render_widget(
-        Paragraph::new(keymap::hints(MARKS)).style(Style::new().fg(theme.muted)),
-        help,
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + 1,
+            width: inner.width.saturating_sub(1),
+            height: text_rows,
+            ..inner
+        },
+    );
+
+    let summary = app.paste_summary();
+    let result = if summary.recognized == 0 {
+        Span::styled("还没有认出时间", muted)
+    } else {
+        let mut parts = vec![format!("新增 {} 个", summary.new)];
+        parts.extend(summary.skipped());
+        Span::styled(
+            format!("认出 {} 个：{}", summary.recognized, parts.join(" · ")),
+            primary,
+        )
+    };
+    let footer = hint_rows(inner, 2);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(result),
+            Line::styled(keymap::hints(PASTE_MARKS), muted),
+        ]),
+        footer,
     );
 }
 
@@ -765,22 +891,24 @@ fn draw_help(frame: &mut Frame, app: &App, theme: &Theme, view: &mut ListView) -
     max_scroll
 }
 
-/// 弹层内容区，以及扣掉底部提示行之后真正留给列表的视口。
-fn list_viewport(area: Rect, block: &Block<'_>) -> (Rect, Rect) {
+/// 弹层内容区，以及扣掉底部 `hints` 行提示之后真正留给列表的视口。
+fn list_viewport(area: Rect, block: &Block<'_>, hints: u16) -> (Rect, Rect) {
     let inner = block.inner(area);
     let viewport = Rect {
-        height: inner.height.saturating_sub(1),
+        height: inner.height.saturating_sub(hints),
         ..inner
     };
     (inner, viewport)
 }
 
-fn help_row(inner: Rect) -> Rect {
+/// 内容区最底下 `rows` 行，放按键提示。
+fn hint_rows(inner: Rect, rows: u16) -> Rect {
+    let rows = rows.min(inner.height);
     Rect::new(
         inner.x + 1,
-        inner.bottom().saturating_sub(1),
+        inner.bottom().saturating_sub(rows),
         inner.width.saturating_sub(1),
-        1,
+        rows,
     )
 }
 

@@ -13,5 +13,6 @@ pub mod search;
 pub mod session;
 pub mod spectrum;
 pub mod theme;
+pub mod timeline_text;
 pub mod track;
 pub mod ui;

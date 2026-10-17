@@ -11,6 +11,7 @@ use crate::media::MediaEvent;
 use crate::player::PlaybackBackend;
 use crate::playlist::PlaylistId;
 use crate::spectrum::SpectrumProcessor;
+use crate::timeline_text::Parsed;
 
 use super::Overlay;
 use super::order::PlaybackOrder;
@@ -42,7 +43,10 @@ pub struct Playback {
     /// 等待交给系统媒体会话的事件。
     pub(super) media_events: Vec<MediaEvent>,
     pub(super) sleep: SleepTimer,
-    /// 最近一次交给后端的淡出增益，没变时不重复设置。
+    /// 睡眠定时和片段切换各自的淡出增益，见 `fade.rs`。
+    pub(super) sleep_gain: f32,
+    pub(super) clip_gain: f32,
+    /// 最近一次交给后端的淡出增益（上面两个里较小的），没变时不重复设置。
     pub(super) fade_gain: f32,
 }
 
@@ -61,6 +65,8 @@ impl Playback {
             lyrics: None,
             media_events: Vec::new(),
             sleep: SleepTimer::Off,
+            sleep_gain: 1.0,
+            clip_gain: 1.0,
             fade_gain: 1.0,
         }
     }
@@ -87,6 +93,12 @@ pub struct ViewState {
     pub(crate) help_scroll: usize,
     /// 新建播放列表、给跳转点或列表条目改名时输入的名称。
     pub(crate) name_input: String,
+    /// 粘贴框里的时间轴原文，行之间用 `\n` 分开。只经由 `App::edit_paste_text` 改动。
+    pub(crate) paste_text: String,
+    /// `paste_text` 的识别结果，内容变了才重新识别，界面每一帧不用重来。
+    pub(crate) paste_parsed: Vec<Parsed>,
+    /// 粘贴框是为哪一项打开的：时间轴加到这个文件上。中途换了曲目也不变。
+    pub(crate) paste_for: Option<(PathBuf, Origin)>,
     /// 正要加进播放列表的片段：“加到播放列表”面板和在那里新建列表时用。
     pub(crate) clip: Option<NewClip>,
     /// 这次运行里上一次把片段加进了哪个列表，下次光标先落在它上面。

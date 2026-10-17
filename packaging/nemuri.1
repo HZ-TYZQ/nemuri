@@ -66,13 +66,14 @@ of an existing one is refused. The progress bar shows marks as |, and when the
 current section's mark has a name, the now playing border shows it.
 .TP
 .B B
-Open the jump marks of the playing recording: Enter jumps to the selected mark,
+Open the jump marks of the playing recording, also before it has any: Enter
+jumps to the selected mark,
 a adds the section from it to the next mark (or to the end of the file) to a
 playlist chosen next (see
 .BR PLAYLISTS ),
 s or S makes it the recording's start or end point (pressing it again clears
-it), e renames it (an empty name leaves only its time), d deletes it, and Esc or
-B closes the panel.
+it), e renames it (an empty name leaves only its time), d deletes it, v opens
+the paste box described below, and Esc or B closes the panel.
 A recording has at most one start and one end point, the start before the end;
 setting a new one turns the old one back into a plain mark, and deleting the
 mark removes it. When the recording would otherwise play from 0:00 (unheard,
@@ -81,6 +82,19 @@ end point ends the track as if the file ended there: it counts as finished and
 the repeat mode, the queue, and the end-of-recording sleep timer take over.
 Seeking onto or past the end point plays on to the real end of the file, and
 seeking back before it stops there again.
+.IP
+The paste box takes a timeline, such as one copied from a video description,
+and adds all its marks at once. Each line gives at most one mark: the first
+time on the line (m:ss, mmm:ss, or h:mm:ss, with optional milliseconds; also
+with full-width digits, in brackets, or as the start of a range such as
+03:21~05:00), named after the text that follows it, or the text before it when
+nothing follows. Lines without a time are dimmed and ignored. Enter starts a
+new line, Ctrl+S adds the marks, and Esc cancels. Times within one second of an
+existing mark or past the end of the recording are skipped, and the box shows
+how many marks it found and how many it will add. Times count from the start of
+the recording, also while a clip plays. On Linux the terminal hands over a
+paste as one block; pasted into the search or a name box it becomes one line,
+and anywhere else it is ignored rather than run as keys.
 .TP
 .BR { , }
 Jump to the previous or next jump mark. Within 3 seconds after a mark,
@@ -238,6 +252,16 @@ shown. Playlist entries, whole ones included, ignore the recording's start and
 end points and leave listening progress alone, so s and S in the jump mark
 panel are disabled while one plays.
 .PP
+A clip that ends before the end of its file fades out over its last 3 seconds,
+and one that starts after 0:00 fades in over its first second, so moving from
+clip to clip neither cuts a sound off nor drops into the next one abruptly.
+Whole entries, clips that run to the end of the file, and library playback are
+not faded, and seeking past a clip's end still moves on at once. The fade
+length is the
+.B clip-fade
+setting; 0 turns these fades off. When the sleep timer is fading too, the
+quieter of the two applies.
+.PP
 Inside a playlist, J and K move the selected entry, e names it (an empty name
 clears it), d removes it, and s or S picks its start or end from the file's
 jump marks, the start of the file, or the end of the file. The playing playlist
@@ -260,6 +284,7 @@ playback {
     shuffle #false
     balance 0           // -100 (left only) to 100 (right only)
     swap-channels #false
+    clip-fade 3         // seconds, 0 to 30; 0 turns clip fades off
 }
 sort "artist" descending=#false
 interface {
@@ -288,8 +313,8 @@ the visualizer, lyrics, mouse, and privacy switches), in place, keeping comments
 from the file are appended to their block. Other edits made while it runs are
 kept.
 .B --set-library
-rewrites only the library line. The sleep fade is read at start and never
-written back.
+rewrites only the library line. The sleep and clip fades are read at start and
+never written back.
 .PP
 A wrong value or unknown key is ignored on its own and reported with its line
 number in the footer at start-up. A syntax error is reported with its line and
