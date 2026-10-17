@@ -5,6 +5,8 @@
 本轮新增 BUG-020、BUG-021，均为 P2，已于 2026-10-18 在 `feat/v2.4.0` 修复；两项均在 `dev-fedora` 容器内的临时源码副本中
 通过独立测试复现，详见文末“exp/termux 分支逻辑审查”。
 
+2026-10-18 在 Termux 实机上新增 BUG-019（P3），待修复，见文末“Termux 实机检查”。
+
 上一轮审查日期：2026-10-17，基于提交 `2b48330e2da2df8f1b412e9fea730f685b84749a`（v2.3.0）。
 本轮新增 BUG-014 至 BUG-018：BUG-014 至 BUG-017 为 P2，BUG-018 为 P3。
 处理安排：BUG-014、BUG-015 暂不处理；BUG-016、BUG-018 已于 2026-10-17 修复；BUG-017 待修复。
@@ -796,6 +798,40 @@ UTF-16 JSON，加载、添加新点、保存后检查原始字节是否存在于
 
 复现测试未加入当前仓库；既有测试通过不代表这些场景已经正确处理。
 应用交互测试使用假播放后端；本轮没有执行 Windows 实机、两个独立进程的交互或真实音频输出验证。
+
+## Termux 实机检查（2026-10-18）
+
+检查的是 `exp/termux` 分支打出的 Termux 包（基于提交 `eb9cd6a`，AAudio 版）。
+手机为 OnePlus PLZ110（Android 16），Termux 0.118.3，终端字体先后是 JetBrainsMonoNL Nerd Font Mono
+和 CaskaydiaCove Nerd Font Mono，两种字体都没有 U+23F8。
+
+### BUG-019：Termux 里的播放标记 ⏸ 显示成彩色 emoji
+
+- 优先级：P3。
+- 状态：待修复。
+- 相关代码：[src/ui/library.rs](../src/ui/library.rs) 的 `PAUSE_ACTION_ICON`。
+
+复现步骤：
+
+1. 在 Termux 里使用不含 U+23F8 的终端字体，例如上面两种。
+2. 启动 Nemuri，播放一首。
+
+预期：曲库列表和“正在播放”面板里的播放标记和其他文字一样，是单色、占一格的符号。
+
+实际：`⏸` 显示成 Android 的彩色 emoji（橙色方块），挤在一格里；“正在播放”面板里它盖住了左边框。
+
+原因：`PAUSE_ACTION_ICON` 是 `⏸` 加 U+FE0E（要求按文字样式显示）。U+23F8 也有 emoji 形式，
+终端字体里没有这个字符时，Termux 不理会 U+FE0E，Android 从彩色 emoji 字体里取字形。
+kitty 里同样缺字，但由 Adwaita Mono 补上，显示正常。暂停时的 `⏵`（U+23F5）没有 emoji 形式，
+应该不受影响，没有实机确认。
+
+建议：换成没有 emoji 形式、样子仍像暂停键的符号。`‖`（U+2016）和两格的 `▌▌` 不好看，不采用；
+用什么待定。改动对所有平台生效。
+
+验证：用 `adb exec-out screencap` 截取实机屏幕确认。
+
+另见：Termux 里竖线和频谱方块在行与行之间有细缝。两种字体的 `█`、`│` 都占满行高，
+细缝来自 Termux 自己的绘制（行高取整、逐行画背景），kitty 自己画这些字符所以没有。Nemuri 无法处理，不记为问题。
 
 ## exp/termux 分支逻辑审查（2026-10-18）
 
