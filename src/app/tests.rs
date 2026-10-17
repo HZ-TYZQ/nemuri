@@ -447,6 +447,51 @@ fn visualizer_key_does_not_escape_search_or_overlay_modes() {
     assert_eq!(app.view.overlay, Overlay::Help);
 }
 
+#[test]
+fn a_paste_goes_into_the_focused_input_as_one_line() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.view.search_active = true;
+    app.dispatch(Action::Paste("耳语\r\n掏耳\t安静\n".to_owned()));
+    assert_eq!(app.catalog.query(), "耳语 掏耳 安静");
+
+    app.view.search_active = false;
+    app.view.overlay = Overlay::NameInput;
+    app.view.name_input = "睡前".to_owned();
+    app.dispatch(Action::Paste(" 列表\n\n".to_owned()));
+    assert_eq!(app.view.name_input, "睡前 列表");
+}
+
+#[test]
+fn a_paste_outside_an_input_is_not_run_as_shortcuts() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    let visualizer = app.config.visualizer_enabled;
+    app.dispatch(Action::Paste("v/q".to_owned()));
+    assert!(!app.should_quit());
+    assert_eq!(app.config.visualizer_enabled, visualizer);
+    assert!(!app.view.search_active);
+    assert_eq!(app.catalog.query(), "");
+}
+
+#[test]
+fn control_keys_are_not_typed_into_an_input() {
+    let (_temp, mut app) = test_app(AppConfig::default());
+    app.view.search_active = true;
+    press(
+        &mut app,
+        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+    );
+    assert_eq!(app.catalog.query(), "");
+    // Windows 上 AltGr 打出的字符带着 Ctrl 和 Alt，仍是输入。
+    press(
+        &mut app,
+        KeyEvent::new(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ),
+    );
+    assert_eq!(app.catalog.query(), "@");
+}
+
 /// 帮助弹层所在的各行：去掉最后一行底栏，底栏的提示里也有“q 退出”。
 fn popup_text(backend: &ratatui::backend::TestBackend) -> String {
     let rows = screen_rows(backend);

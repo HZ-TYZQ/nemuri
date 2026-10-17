@@ -84,6 +84,8 @@ pub enum Action {
     // 文字输入（搜索框、新建播放列表）
     InputChar(char),
     InputBackspace,
+    /// 终端送来的一整段粘贴（bracketed paste，只在 Linux 上打开）。
+    Paste(String),
 
     // 播放列表与队列弹层
     /// 打开新建播放列表的输入框。
@@ -206,6 +208,7 @@ impl App {
             Action::Back => self.back(),
             Action::InputChar(character) => self.input_char(character),
             Action::InputBackspace => self.input_backspace(),
+            Action::Paste(text) => self.paste(&text),
             Action::NewPlaylist => {
                 self.view.name_input.clear();
                 self.view.overlay = Overlay::NameInput;
@@ -383,6 +386,23 @@ impl App {
         }
     }
 
+    /// 粘贴进单行输入框时，换行和制表符换成空格，末尾的空白去掉。
+    /// 不在输入时忽略：一段文字不该被当成一串快捷键执行。
+    fn paste(&mut self, text: &str) {
+        let line = one_line(text);
+        match self.view.overlay {
+            Overlay::NameInput | Overlay::MarkName | Overlay::EntryName => {
+                self.view.name_input.push_str(&line);
+            }
+            Overlay::None if self.view.search_active => {
+                let mut query = self.catalog.query().to_owned();
+                query.push_str(&line);
+                self.edit_search(query);
+            }
+            _ => {}
+        }
+    }
+
     /// 开启鼠标捕获会接管终端自己的拖拽选区，因此保留一个开关；
     /// 真正的终端模式切换由主循环在下一次迭代时应用。
     fn toggle_mouse(&mut self) {
@@ -396,4 +416,19 @@ impl App {
             .to_owned(),
         );
     }
+}
+
+/// 多行文字压成一行：换行（`\r\n` 算一个）和其他控制字符换成空格，去掉末尾的空白。
+fn one_line(text: &str) -> String {
+    text.replace("\r\n", "\n")
+        .trim_end()
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }

@@ -6,13 +6,15 @@ use clap::Parser;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind, MouseEventKind,
 };
+#[cfg(not(windows))]
+use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::prelude::*;
 
-use nemuri::app::{App, join_notes};
+use nemuri::app::{Action, App, join_notes};
 use nemuri::cli::{Cli, validate_directory};
 use nemuri::config::{self, AppConfig, AppPaths, LoadedConfig};
 use nemuri::media::{MediaEvent, MediaSession};
@@ -138,6 +140,7 @@ fn run(
                         app.dispatch(action);
                     }
                 }
+                Event::Paste(text) => app.dispatch(Action::Paste(text)),
                 _ => {}
             }
         }
@@ -173,6 +176,8 @@ fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
+        #[cfg(not(windows))]
+        let _ = execute!(stdout(), DisableBracketedPaste);
         let _ = execute!(stdout(), DisableMouseCapture, LeaveAlternateScreen);
         original_hook(info);
     }));
@@ -180,11 +185,18 @@ fn setup_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut output = stdout();
     execute!(output, EnterAlternateScreen)?;
+    // 粘贴作为一整段送来，不会被当成一串按键。Windows 上不打开：crossterm 在那里用控制台 API
+    // 读按键，终端包在粘贴两头的转义序列会被拆成按键，其中的 Esc 会被当成“返回”。
+    // Windows 上的粘贴仍逐键送来，粘贴框里 Enter 是换行，照样能用。
+    #[cfg(not(windows))]
+    execute!(output, EnableBracketedPaste)?;
     Terminal::new(CrosstermBackend::new(output))
 }
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
     disable_raw_mode()?;
+    #[cfg(not(windows))]
+    execute!(terminal.backend_mut(), DisableBracketedPaste)?;
     execute!(
         terminal.backend_mut(),
         DisableMouseCapture,

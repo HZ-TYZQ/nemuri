@@ -486,9 +486,16 @@ pub(super) fn lookup(bindings: &[Binding], text_input: bool, event: KeyEvent) ->
         .find(|(key, _)| key.matches(event))
         .map(|(_, action)| action.clone())
         .or(match event.code {
-            KeyCode::Char(character) if text_input => Some(Action::InputChar(character)),
+            KeyCode::Char(character) if text_input && !is_shortcut(event.modifiers) => {
+                Some(Action::InputChar(character))
+            }
             _ => None,
         })
+}
+
+/// 按着 Ctrl 的是快捷键，不是输入。Windows 上 AltGr 打出的字符带着 Ctrl 和 Alt，仍算输入。
+fn is_shortcut(modifiers: KeyModifiers) -> bool {
+    modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT)
 }
 
 /// 弹层底部那一行提示：列出的绑定按表中顺序，用 “ · ” 连接。
