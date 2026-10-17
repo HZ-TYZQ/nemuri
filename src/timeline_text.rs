@@ -95,14 +95,15 @@ fn time_at(chars: &[char], start: usize) -> Option<(usize, Duration)> {
     let mut index = start + leading;
     let first = two_digits_after_colon(chars, index)?;
     index += 3;
-    let (hours, minutes, seconds) = match two_digits_after_colon(chars, index) {
+    // 三段式 h:mm:ss 的分钟要小于 60，小时是 0 也一样；两段式 m:ss 的分钟可以超过 59。
+    let (hours, minutes, seconds, three_parts) = match two_digits_after_colon(chars, index) {
         Some(second) => {
             index += 3;
-            (value(&chars[start..start + leading]), first, second)
+            (value(&chars[start..start + leading]), first, second, true)
         }
-        None => (0, value(&chars[start..start + leading]), first),
+        None => (0, value(&chars[start..start + leading]), first, false),
     };
-    if seconds >= 60 || (hours > 0 && minutes >= 60) {
+    if seconds >= 60 || (three_parts && minutes >= 60) {
         return None;
     }
     let mut millis = 0;
@@ -224,6 +225,8 @@ mod tests {
         assert_eq!(one("03:21 掏耳"), named(201, "掏耳"));
         assert_eq!(one("3:21 掏耳"), named(201, "掏耳"));
         assert_eq!(one("1:02:03 结束"), named(3723, "结束"));
+        assert_eq!(one("0:59:59 快一小时"), named(3599, "快一小时"));
+        assert_eq!(one("０：５９：５９"), Some((at(3599), None)));
         // 长视频常把分钟写过 59。
         assert_eq!(one("75:30 很晚了"), named(4530, "很晚了"));
         assert_eq!(one("00:00"), Some((Duration::ZERO, None)));
@@ -240,6 +243,9 @@ mod tests {
         for line in [
             "03:60 秒数不对",
             "1:60:00 分钟不对",
+            "0:60:00 小时是 0 分钟也不对",
+            "0:99:00",
+            "０：６０：００",
             "103:21:5",
             "12:3",
             "12:345",
