@@ -24,7 +24,7 @@ impl App {
         if requested < 0 {
             let start = self.file_time(Duration::ZERO);
             if self.playback.player.seek_to(start) {
-                self.push_seeked(start);
+                self.seeked(start);
             }
             return;
         }
@@ -36,7 +36,7 @@ impl App {
         }
         let target = self.file_time(Duration::from_micros(requested as u64));
         if self.playback.player.seek_to(target) {
-            self.push_seeked(self.playback.player.position());
+            self.seeked(self.playback.player.position());
         }
     }
 
@@ -80,13 +80,15 @@ impl App {
         }
         let moved = self.playback.player.seek_to(position);
         if moved {
-            self.push_seeked(self.playback.player.position());
+            self.seeked(self.playback.player.position());
         }
         moved
     }
 
-    /// 告诉系统媒体控制跳到了哪里；`position` 是文件时间，交出去的是显示时间。
-    fn push_seeked(&mut self, position: Duration) {
+    /// 跳成了：结束装载后的淡入（跳转不淡入），再告诉系统媒体控制跳到了哪里；
+    /// `position` 是文件时间，交出去的是显示时间。
+    fn seeked(&mut self, position: Duration) {
+        self.end_fade_in();
         let position = self.shown(position);
         self.playback
             .media_events

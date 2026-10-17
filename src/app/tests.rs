@@ -5228,6 +5228,38 @@ fn jumps_during_the_fade_in_and_playing_through_the_start_point_do_not_fade_in()
 }
 
 #[test]
+fn a_jump_that_lands_inside_the_fade_in_ends_it_too() {
+    // BUG-020：淡入 10 秒，放到 2:05 时跳回起点或这一段里的别处，仍在刚装载时的那一段里，
+    // 也立刻满音量，不从无声重新淡入。
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        clip_fade: 30 * SECOND,
+        ..AppConfig::default()
+    });
+    bounds_fixture(&mut app, &temp.path().join("music"), MINUTE);
+    let fading = START_POINT + 5 * SECOND;
+
+    // 按 0 回到起点：跳成了就满音量，不等下一个 tick。
+    reload_rec1(&mut app);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    press(&mut app, key(KeyCode::Char('0')));
+    assert_eq!(app.player().position(), START_POINT);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(gain_at(&mut app, &control, START_POINT + HALF_SECOND), 1.0);
+
+    // 系统媒体控制跳到这一段里：没跳成（不是这一首）时照旧淡入，跳成了满音量。
+    reload_rec1(&mut app);
+    assert_eq!(gain_at(&mut app, &control, fading), 0.25);
+    assert!(!app.seek_to_shown(START_POINT + 3 * SECOND, Some("另一首")));
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 0.25);
+    assert!(app.seek_to_shown(START_POINT + 3 * SECOND, None));
+    assert_eq!(control.fade_gain(), 1.0);
+
+    // 终点前的淡出不受影响。
+    assert_eq!(gain_at(&mut app, &control, END_POINT - 15 * SECOND), 0.25);
+}
+
+#[test]
 fn setting_the_start_or_end_point_where_playback_is_keeps_the_volume() {
     let (temp, mut app, control) = test_app_with_control(AppConfig::default());
     marks_fixture(
