@@ -424,19 +424,28 @@ impl App {
                 self.save_marks_now(message);
                 self.apply_stop();
             }
-            Err(RoleError::Missing) => {}
-            Err(RoleError::StartNotBeforeEnd(end)) => {
-                let end = self.role_label(Role::End, end);
-                self.view.message = Some(format!("起点要在终点 {end} 之前"));
-            }
-            Err(RoleError::EndNotAfterStart(Some(start))) => {
-                let start = self.role_label(Role::Start, start);
-                self.view.message = Some(format!("终点要在起点 {start} 之后"));
-            }
-            Err(RoleError::EndNotAfterStart(None)) => {
-                self.view.message = Some("终点要在 0:00 之后".to_owned());
+            Err(error) => {
+                if let Some(reason) = self.role_refusal(error) {
+                    self.view.message = Some(reason);
+                }
             }
         }
+    }
+
+    /// 设起点终点没设成时怎么说；没有这个跳转点时不用说。
+    fn role_refusal(&self, error: RoleError) -> Option<String> {
+        Some(match error {
+            RoleError::Missing => return None,
+            RoleError::StartNotBeforeEnd(end) => {
+                format!("起点要在终点 {} 之前", self.role_label(Role::End, end))
+            }
+            RoleError::EndNotAfterStart(Some(start)) => {
+                format!("终点要在起点 {} 之后", self.role_label(Role::Start, start))
+            }
+            RoleError::EndNotAfterStart(None) => "终点要在 0:00 之后".to_owned(),
+            RoleError::UnsupportedPath => UNSUPPORTED_PATH.to_owned(),
+            RoleError::ReadOnly => READ_ONLY.to_owned(),
+        })
     }
 
     /// 当前曲目的起点或终点在提示里的称呼；找不到时只写时间。
