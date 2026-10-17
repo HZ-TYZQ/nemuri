@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Cross-compile a Termux .deb of nemuri with the Android NDK (experimental).
 #
-# Like the cpal users in termux-packages (termusic, chroma-visualizer), cpal is
-# built with its ALSA backend instead of the Android one: the Android backend asks
-# the Java AudioManager for its buffer size and panics in a plain executable,
-# which has no JVM context. In Termux, alsa-lib with alsa-plugins plays through
-# PulseAudio, and Termux's PulseAudio plays through Android.
+# Two ways to get sound out:
+#   aaudio  cpal's Android backend, which plays through AAudio (Android 8+). Its
+#           JNI queries would panic without a JVM; nemuri hands it an empty
+#           context so they fail and it falls back to defaults.
+#   alsa    cpal patched to use its ALSA backend, like the cpal users in
+#           termux-packages (termusic, chroma-visualizer). alsa-lib with
+#           alsa-plugins plays through Termux's PulseAudio.
 #
-# Usage: packaging/termux/build-deb.sh [aarch64|x86_64|arm|i686]
+# Usage: packaging/termux/build-deb.sh [aarch64|x86_64|arm|i686] [aaudio|alsa]
 # Run it inside the dev-fedora container. Needs the NDK in $ANDROID_NDK_HOME
 # (default ~/android/android-ndk-r30), the Rust target for the arch, dpkg-deb
 # and pkg-config.
@@ -15,12 +17,28 @@ set -euo pipefail
 
 project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 arch=${1:-aarch64}
-api=24
+audio=${2:-aaudio}
 termux_prefix=/data/data/com.termux/files/usr
 repo_url=https://packages.termux.dev/apt/termux-main
 ndk=${ANDROID_NDK_HOME:-$HOME/android/android-ndk-r30}
-link_packages=(alsa-lib libandroid-sysv-semaphore libandroid-shmem libsqlite zlib)
-depends="alsa-lib, alsa-plugins, pulseaudio, libsqlite"
+
+case "$audio" in
+    # libaaudio only exists from API 26 on.
+    aaudio)
+        api=26
+        link_packages=(libsqlite zlib)
+        depends="libsqlite"
+        ;;
+    alsa)
+        api=24
+        link_packages=(alsa-lib libandroid-sysv-semaphore libandroid-shmem libsqlite zlib)
+        depends="alsa-lib, alsa-plugins, pulseaudio, libsqlite"
+        ;;
+    *)
+        echo "error: unknown audio backend '$audio' (expected aaudio or alsa)" >&2
+        exit 1
+        ;;
+esac
 
 case "$arch" in
     aarch64) target=aarch64-linux-android clang_target=aarch64-linux-android ;;
@@ -45,7 +63,7 @@ if [[ ! -x "$toolchain/${clang_target}${api}-clang" ]]; then
     exit 1
 fi
 
-work_dir="${CARGO_TARGET_DIR:?CARGO_TARGET_DIR must be set}/termux/$arch"
+work_dir="${CARGO_TARGET_DIR:?CARGO_TARGET_DIR must be set}/termux/$audio/$arch"
 sysroot="$work_dir/sysroot"
 source_dir="$work_dir/src"
 mkdir -p "$work_dir/debs"
@@ -74,14 +92,16 @@ done
 # Build from a copy of the tracked files, so the patched cpal and the lockfile
 # change that comes with it stay out of the checkout.
 git -C "$project_dir" ls-files -z | tar -C "$project_dir" --null -T - -cf - | tar -C "$source_dir" -xf -
-cpal_manifest=$(cd "$source_dir" && cargo metadata --format-version 1 --locked --filter-platform "$target" |
-    python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "cpal"))')
-cp -r "$(dirname "$cpal_manifest")" "$source_dir/vendor-cpal"
-find "$source_dir/vendor-cpal" -type f \( -name '*.rs' -o -name Cargo.toml \) -print0 |
-    xargs -0 sed -i \
-        -e 's|"android"|"disabling_this_because_it_is_for_building_an_apk"|g' \
-        -e 's|"linux"|"android"|g'
-printf '\n[patch.crates-io]\ncpal = { path = "vendor-cpal" }\n' >> "$source_dir/Cargo.toml"
+if [[ "$audio" == alsa ]]; then
+    cpal_manifest=$(cd "$source_dir" && cargo metadata --format-version 1 --locked --filter-platform "$target" |
+        python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "cpal"))')
+    cp -r "$(dirname "$cpal_manifest")" "$source_dir/vendor-cpal"
+    find "$source_dir/vendor-cpal" -type f \( -name '*.rs' -o -name Cargo.toml \) -print0 |
+        xargs -0 sed -i \
+            -e 's|"android"|"disabling_this_because_it_is_for_building_an_apk"|g' \
+            -e 's|"linux"|"android"|g'
+    printf '\n[patch.crates-io]\ncpal = { path = "vendor-cpal" }\n' >> "$source_dir/Cargo.toml"
+fi
 
 target_env=${target//-/_}
 target_env_upper=${target_env^^}
@@ -114,6 +134,6 @@ Depends: $depends
 Homepage: https://github.com/HZ-TYZQ/nemuri
 Description: A terminal player for ASMR and music
 EOF
-output="$CARGO_TARGET_DIR/termux/nemuri_${version}_$arch.deb"
+output="$CARGO_TARGET_DIR/termux/$audio/nemuri_${version}_$arch.deb"
 dpkg-deb --root-owner-group -Zxz --build "$stage" "$output" >/dev/null
 echo "$output"
