@@ -1,5 +1,5 @@
 Name:           nemuri
-Version:        2.2.0
+Version:        2.3.0
 Release:        1%{?dist}
 Summary:        Terminal player for ASMR and music
 
@@ -61,6 +61,16 @@ install -Dpm 0644 assets/icons/%{name}-48.png %{buildroot}%{_datadir}/icons/hico
 %{_datadir}/icons/hicolor/48x48/apps/%{name}.png
 
 %changelog
+* Sat Oct 17 2026 HZ-TYZQ - 2.3.0-1
+- Paste a timeline into the jump mark panel to add named jump marks
+  all at once
+- Fade playlist clips out and in where they are cut from the middle of
+  a recording, with the length set by playback clip-fade
+- Receive terminal pastes as one block on Linux, and ignore pastes
+  outside text inputs
+- Keep file names that are not UTF-8 out of the library cache so such
+  tracks stay playable after a rescan
+
 * Sat Oct 17 2026 HZ-TYZQ - 2.2.0-1
 - Add jump marks to long recordings, with a panel to jump to, rename,
   and delete them
