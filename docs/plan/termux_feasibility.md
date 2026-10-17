@@ -102,7 +102,8 @@ Termux 官方的 termux-docker x86_64 镜像（带 Android 的 bionic 和动态�
 
 ## 5. 发布途径
 
-1. **自己发 .deb**：GitHub Release 附上 aarch64 的包，用户运行 `apt install ./nemuri_X_aarch64.deb`。升级要手动下载新包。
+1. **自己发 .deb**（已接入发布流程，见第 8 节）：GitHub Release 附上 aarch64 和 x86_64 的包，
+   用户运行 `apt install ./nemuri_X_aarch64.deb`。升级要手动下载新包。
 2. **在 Termux 里从源码装**：有了空上下文，不用改 cpal，`pkg install rust` 之后 `cargo install --git https://github.com/HZ-TYZQ/nemuri` 应该就行。
    这次没有在手机上构建；手机上之前那个 2.2.0 测试包用的是同样的空上下文，就是在 Termux 里直接 `cargo build` 出来的。
 3. **提交到 termux-packages**：之后用 `pkg install nemuri` 安装，跟着软件源升级。termux-packages 按 API 24 构建，
@@ -117,7 +118,6 @@ Termux 官方的 termux-docker x86_64 镜像（带 Android 的 bionic 和动态�
 - 没有通知栏和锁屏上的播放控制（Android 上没有 MPRIS）。
 - 共享存储走 FUSE，读文件和扫描大目录的速度没测过。Nemuri 只读音乐目录，写的文件都在 Termux 自己的目录里。
 - arm（32 位）和 i686 的包没编过，要先 `rustup target add` 对应的目标。
-- 包的版本号取自 `Cargo.toml`，现在还是 2.3.0。
 
 ## 7. 真机验收（在 Termux 应用里）
 
@@ -127,3 +127,23 @@ Termux 官方的 termux-docker x86_64 镜像（带 Android 的 bionic 和动态�
 4. 暂停和继续、快进快退、切歌、调音量；插拔耳机，连接和断开蓝牙。
 5. 熄屏后继续播放（必要时先 `termux-wake-lock`）。
 6. 退出再打开，确认会话和收听进度都保存了。
+
+## 8. GitHub Actions
+
+都在 ubuntu-24.04 上，用 runner 自带的 NDK 30（`$ANDROID_NDK_LATEST_HOME`，和 Termux 用的同一版；默认的 `$ANDROID_NDK_HOME` 是 27）。
+测试和安装在 Termux 官方的 `termux/termux-docker:x86_64` 容器里，以 Termux 自己的非 root 用户运行。
+容器里没有 `libaaudio.so`，挂进 NDK 里的同名存根，只让程序能装载；测试用假后端和无设备的混音器，不打开音频设备。
+
+| 工作流 | 任务 | 做什么 |
+| --- | --- | --- |
+| `ci.yml`（每个 PR、推送 master） | `android` | `cargo clippy --target aarch64-linux-android`；`build.sh tests x86_64` 编出测试程序，在容器里装上 `libsqlite` 后逐个运行 |
+| `packaging.yml`（打包相关文件改动时） | `termux-deb` | `build.sh deb` 打 aarch64、x86_64 两个包；在容器里 `apt install` x86_64 的包（顺带装上依赖），运行 `nemuri --version`、`--help`；上传为 `termux-debs-ci` |
+| `release.yml`（标签） | `termux` | 同 `termux-deb`，上传为 `termux-debs`，`publish` 把它们放进发布页和 `SHA256SUMS.txt`；还没有 `packaging/termux/build.sh` 的旧标签跳过这一步 |
+
+`build.sh` 没有 `CARGO_TARGET_DIR` 时（runner 上）在 `target/termux` 下工作。
+怎么出声仍然只能在手机上验。
+
+本地照着跑过一遍：在 termux-docker 的根文件系统里挂上同一个存根，测试程序 422 + 21 个全部通过，x86_64 的包装上后能启动。
+其间发现一个和 Android 无关的不稳定测试：`plain_lyrics_fill_the_pane_and_scroll_with_the_progress` 的歌词行是 `L01`…`L40`，
+检查画面上没有 “L2”，而曲库标题里的临时目录名是随机的字母和数字，约 770 次里有一次碰巧含有 “L2”。
+已改用 `第01行`…`第40行`。
