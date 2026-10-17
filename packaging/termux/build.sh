@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Cross-compile a Termux .deb of nemuri with the Android NDK (experimental).
+# Cross-compile nemuri for Termux with the Android NDK.
+#
+#   deb    build the release binary and package it as a Termux .deb
+#   tests  build the test executables, to run inside Termux (CI uses termux-docker)
 #
 # Two ways to get sound out:
 #   aaudio  cpal's Android backend, which plays through AAudio (Android 8+). Its
@@ -9,18 +12,28 @@
 #           termux-packages (termusic, chroma-visualizer). alsa-lib with
 #           alsa-plugins plays through Termux's PulseAudio.
 #
-# Usage: packaging/termux/build-deb.sh [aarch64|x86_64|arm|i686] [aaudio|alsa]
-# Run it inside the dev-fedora container. Needs the NDK in $ANDROID_NDK_HOME
-# (default ~/android/android-ndk-r30), the Rust target for the arch, dpkg-deb
-# and pkg-config.
+# Usage: packaging/termux/build.sh {deb|tests} [aarch64|x86_64|arm|i686] [aaudio|alsa]
+# Prints the .deb path, or the directory holding the test executables.
+# Needs the NDK in $ANDROID_NDK_HOME (default ~/android/android-ndk-r30), the
+# Rust target for the arch, dpkg-deb, pkg-config and python3. Locally, run it
+# inside the dev-fedora container.
 set -euo pipefail
 
 project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-arch=${1:-aarch64}
-audio=${2:-aaudio}
+mode=${1:-}
+arch=${2:-aarch64}
+audio=${3:-aaudio}
 termux_prefix=/data/data/com.termux/files/usr
 repo_url=https://packages.termux.dev/apt/termux-main
 ndk=${ANDROID_NDK_HOME:-$HOME/android/android-ndk-r30}
+
+case "$mode" in
+    deb | tests) ;;
+    *)
+        echo "usage: $0 {deb|tests} [aarch64|x86_64|arm|i686] [aaudio|alsa]" >&2
+        exit 1
+        ;;
+esac
 
 case "$audio" in
     # libaaudio only exists from API 26 on.
@@ -63,7 +76,8 @@ if [[ ! -x "$toolchain/${clang_target}${api}-clang" ]]; then
     exit 1
 fi
 
-work_dir="${CARGO_TARGET_DIR:?CARGO_TARGET_DIR must be set}/termux/$audio/$arch"
+work_root="${CARGO_TARGET_DIR:-$project_dir/target}/termux/$audio"
+work_dir="$work_root/$arch"
 sysroot="$work_dir/sysroot"
 source_dir="$work_dir/src"
 mkdir -p "$work_dir/debs"
@@ -92,6 +106,7 @@ done
 # Build from a copy of the tracked files, so the patched cpal and the lockfile
 # change that comes with it stay out of the checkout.
 git -C "$project_dir" ls-files -z | tar -C "$project_dir" --null -T - -cf - | tar -C "$source_dir" -xf -
+cargo_args=(--target "$target")
 if [[ "$audio" == alsa ]]; then
     cpal_manifest=$(cd "$source_dir" && cargo metadata --format-version 1 --locked --filter-platform "$target" |
         python3 -c 'import json, sys; print(next(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"] == "cpal"))')
@@ -101,6 +116,8 @@ if [[ "$audio" == alsa ]]; then
             -e 's|"android"|"disabling_this_because_it_is_for_building_an_apk"|g' \
             -e 's|"linux"|"android"|g'
     printf '\n[patch.crates-io]\ncpal = { path = "vendor-cpal" }\n' >> "$source_dir/Cargo.toml"
+else
+    cargo_args+=(--locked)
 fi
 
 target_env=${target//-/_}
@@ -114,11 +131,32 @@ export PKG_CONFIG_ALLOW_CROSS=1
 export PKG_CONFIG_SYSROOT_DIR="$sysroot"
 export PKG_CONFIG_LIBDIR="$lib_dir/pkgconfig"
 export PKG_CONFIG_PATH=
-(cd "$source_dir" && CARGO_TARGET_DIR="$work_dir/target" cargo build --release --target "$target")
+export CARGO_TARGET_DIR="$work_dir/target"
+
+if [[ "$mode" == tests ]]; then
+    tests_dir="$work_dir/tests"
+    rm -rf "$tests_dir"
+    mkdir -p "$tests_dir"
+    (cd "$source_dir" && cargo test --no-run --all-targets "${cargo_args[@]}" --message-format=json) |
+        python3 -c '
+import json, sys
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("reason") == "compiler-artifact" and message["profile"]["test"] and message["executable"]:
+        print(message["executable"])
+' |
+        while read -r executable; do
+            cp "$executable" "$tests_dir/"
+        done
+    echo "$tests_dir"
+    exit 0
+fi
+
+(cd "$source_dir" && cargo build --release "${cargo_args[@]}")
 
 version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml" | head -n 1)
 stage="$work_dir/pkg"
-install -Dm755 "$work_dir/target/$target/release/nemuri" "$stage$termux_prefix/bin/nemuri"
+install -Dm755 "$CARGO_TARGET_DIR/$target/release/nemuri" "$stage$termux_prefix/bin/nemuri"
 "$toolchain/llvm-strip" "$stage$termux_prefix/bin/nemuri"
 install -Dm644 "$project_dir/packaging/nemuri.1" "$stage$termux_prefix/share/man/man1/nemuri.1"
 gzip -9n "$stage$termux_prefix/share/man/man1/nemuri.1"
@@ -134,6 +172,6 @@ Depends: $depends
 Homepage: https://github.com/HZ-TYZQ/nemuri
 Description: A terminal player for ASMR and music
 EOF
-output="$CARGO_TARGET_DIR/termux/$audio/nemuri_${version}_$arch.deb"
+output="$work_root/nemuri_${version}_$arch.deb"
 dpkg-deb --root-owner-group -Zxz --build "$stage" "$output" >/dev/null
 echo "$output"

@@ -45,7 +45,8 @@ jni 0.21 对空指针返回 `Err(NullPtr)`，不会解引用。所以在 `Player
 
 ## 2. 构建
 
-`packaging/termux/build-deb.sh [aarch64|x86_64|arm|i686] [aaudio|alsa]`（默认 aarch64、aaudio），在 dev-fedora 容器里运行：
+`packaging/termux/build.sh {deb|tests} [aarch64|x86_64|arm|i686] [aaudio|alsa]`（默认 aarch64、aaudio），本地在 dev-fedora 容器里运行。
+`deb` 打包，`tests` 只编出测试程序，放到 Termux 里跑：
 
 - 用 Android NDK r30（Termux 现在用的版本）交叉编译，aaudio 按 API 26、alsa 按 API 24；
 - 从 Termux 软件源下载 libsqlite（alsa 还有 alsa-lib 等）的 .deb，解开作为链接用的 sysroot；二进制的 RUNPATH 指向 `$PREFIX/lib`；
