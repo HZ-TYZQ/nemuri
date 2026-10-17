@@ -1,7 +1,7 @@
 # 已知问题
 
 最近审查日期：2026-10-17，基于 `feat/v2.3.0` 分支提交 `385533bfc4f7dd89785c8c5cbb5d9665deec941a`。
-本轮新增 BUG-011 至 BUG-013，均待修复：BUG-011 为 P2，BUG-012、BUG-013 为 P3。
+本轮新增 BUG-011 至 BUG-013：BUG-011 为 P2，BUG-012、BUG-013 为 P3，均已于 2026-10-17 在同一分支修复，见各条的“状态”。
 前两项通过 `dev-fedora` 容器内临时源码副本中的独立测试复现，性能问题通过计时确认，详见文末。
 
 上轮审查日期：2026-10-16，基于提交 `b01ad0fa15387041d6693ea4d7cbefa46d7f2de0`。
@@ -472,7 +472,13 @@ UTF-16 JSON，加载、添加新点、保存后检查原始字节是否存在于
 ### BUG-011：切歌前的新增益会先作用于仍在播放的旧音源
 
 - 优先级：P2。
-- 状态：待修复。
+- 状态：已修复，提交 `a66cefb`。`load_track()` 改为总是先暂停着装载（`open` / `open_at`），
+  这时播放器已经换下旧音源，再设新的一项的片段增益（`starting_clip_gain()`），然后才 `resume()`。
+  旧音源在打开和解码新文件期间保持自己的增益；装载失败时增益不变，失败后重算增益的那一步随之去掉。
+  假后端记下开始装载时和从暂停开始播放时的增益。
+  回归测试：`src/app/tests.rs` 的 `a_fading_clip_keeps_its_volume_until_the_next_source_takes_over`
+  （片段淡出到 0.25 时切到曲库整首、切到从中间开始的片段、装载失败，分别检查装载期间旧音源的增益
+  和新音源出声时的增益）和 `a_clip_that_fails_to_load_leaves_the_playing_one_audible`。
 - 相关代码：[src/app/playback.rs](../src/app/playback.rs) 的 `play_item()`，第 143 行；
   [src/app/fade.rs](../src/app/fade.rs) 的 `prepare_clip_fade()`；
   [src/player/backend.rs](../src/player/backend.rs) 的 `load_at()`。
@@ -508,7 +514,10 @@ UTF-16 JSON，加载、添加新点、保存后检查原始字节是否存在于
 ### BUG-012：小时为零的三段式时间漏检分钟范围
 
 - 优先级：P3。
-- 状态：待修复。
+- 状态：已修复，提交 `9d6c94f`。`time_at()` 记下是否解析到了第三段，三段式一律要求分钟小于 60；
+  两段式 `m:ss` 仍允许超过 59 的分钟。回归测试：`src/timeline_text.rs` 的
+  `things_that_only_look_like_times_are_not`（`0:60:00`、`0:99:00` 和全角写法不认）和
+  `the_usual_ways_of_writing_a_time_are_recognized`（`0:59:59` 及全角写法照常识别）。
 - 相关代码：[src/timeline_text.rs](../src/timeline_text.rs) 的 `time_at()`，第 105 行。
 
 复现：在时间轴粘贴框输入 `0:60:00 错误时间`，或直接调用
@@ -534,7 +543,14 @@ UTF-16 JSON，加载、添加新点、保存后检查原始字节是否存在于
 ### BUG-013：长时间轴每帧全量解析并去重，拖慢界面响应
 
 - 优先级：P3。
-- 状态：待修复。
+- 状态：已修复，提交 `97dec3d`。识别结果存在 `ViewState::paste_parsed`，只在内容变化时
+  （输入、粘贴、退格、清空，统一经由 `App::edit_paste_text()`）重新识别；每帧的摘要只数存下的结果，
+  已有跳转点用二分查找比对（`marks::has_mark_near()`），已有跳转点、目标曲目或时长变了照样跟着变。
+  `parse()` 的去重改用有序集合，只查前后 1 秒以内，保留“先出现优先”。同样 8,000 行，
+  容器内 debug 构建单帧绘制约 2ms（原约 417ms），单次识别约 18ms（原约 485ms）。
+  回归测试：`the_paste_box_reparses_only_when_its_text_changes`、
+  `parsing_keeps_line_numbers_and_drops_near_duplicates`（不挨着的近似重复）和
+  `src/marks.rs` 的 `a_mark_near_a_position_is_found_on_either_side`。
 - 相关代码：[src/ui/overlays.rs](../src/ui/overlays.rs) 的 `draw_paste_marks()`，第 806 行；
   [src/app/marks.rs](../src/app/marks.rs) 的 `paste_summary()`、`paste_plan()`；
   [src/timeline_text.rs](../src/timeline_text.rs) 的 `parse()`，第 38 行。
