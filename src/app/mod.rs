@@ -37,6 +37,7 @@ use crate::track::Track;
 pub use action::Action;
 pub use catalog::Catalog;
 use marks::Marks;
+pub use marks::PasteSummary;
 use playback::Skip;
 pub use playlists::{Bound, BoundChoice, NewClip};
 use progress::Progress;
@@ -58,6 +59,8 @@ pub enum Overlay {
     Marks,
     /// 给面板里选中的跳转点改名。
     MarkName,
+    /// 把时间轴粘贴进来，一次加好跳转点。
+    PasteMarks,
     /// 把跳转点面板里选中的一段加到哪个播放列表。
     PickPlaylist,
     /// 给列表条目挑开头或结尾。

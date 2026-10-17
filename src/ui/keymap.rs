@@ -25,6 +25,8 @@ pub(super) enum Key {
     Shift(KeyCode),
     /// 不能按着 Shift。
     NoShift(KeyCode),
+    /// 必须按着 Ctrl。
+    Ctrl(KeyCode),
 }
 
 impl Key {
@@ -34,6 +36,7 @@ impl Key {
             Self::Any(code) => event.code == code,
             Self::Shift(code) => shift && event.code == code,
             Self::NoShift(code) => !shift && event.code == code,
+            Self::Ctrl(code) => is_shortcut(event.modifiers) && event.code == code,
         }
     }
 }
@@ -154,7 +157,7 @@ pub(super) const LIBRARY: &[Binding] = &[
     ),
     listed(
         "b / B",
-        "加跳转点 / 跳转点面板",
+        "加跳转点 / 跳转点面板（可粘贴时间轴）",
         &[
             (ch('b'), Action::AddMark),
             (ch('B'), Action::OpenOverlay(Overlay::Marks)),
@@ -406,11 +409,27 @@ pub(super) const MARKS: &[Binding] = &[
     ),
     listed("e", "改名", &[(ch('e'), Action::RenameMark)]),
     listed("d", "删除", &[(ch('d'), Action::RemoveMark)]),
+    listed("v", "粘贴时间轴", &[(ch('v'), Action::PasteMarks)]),
     listed(
         "Esc",
         "关闭",
         &[(code(KeyCode::Esc), Action::Back), (ch('B'), Action::Back)],
     ),
+];
+
+/// 粘贴框里没有绑定的字符都当作输入。Enter 是换行：Windows 上的粘贴逐键送来，
+/// Enter 要是确定，多行时间轴粘到第一行就提交了。
+pub(super) const PASTE_MARKS: &[Binding] = &[
+    listed(
+        "Ctrl+S",
+        "添加",
+        &[(Key::Ctrl(KeyCode::Char('s')), Action::Activate)],
+    ),
+    listed("Esc", "取消", &[(code(KeyCode::Esc), Action::Back)]),
+    hidden(&[
+        (code(KeyCode::Enter), Action::InputChar('\n')),
+        (code(KeyCode::Backspace), Action::InputBackspace),
+    ]),
 ];
 
 /// 输入框里没有绑定的字符都当作输入。
@@ -462,6 +481,7 @@ fn bindings_for(app: &App) -> (&'static [Binding], bool) {
         Overlay::DeleteConfirm => (DELETE_CONFIRM, false),
         Overlay::Marks => (MARKS, false),
         Overlay::MarkName => (MARK_NAME, true),
+        Overlay::PasteMarks => (PASTE_MARKS, true),
         Overlay::PickPlaylist => (PICK_PLAYLIST, false),
         Overlay::EntryBound => (ENTRY_BOUND, false),
         Overlay::EntryName => (ENTRY_NAME, true),
@@ -506,6 +526,30 @@ pub(super) fn hints(bindings: &[Binding]) -> String {
         .map(|binding| format!("{} {}", binding.keys, binding.text))
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// 同 [`hints`]，但一行超过 `width` 列时在 “ · ” 处换行。
+pub(super) fn hint_lines(bindings: &[Binding], width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for item in bindings
+        .iter()
+        .filter(|binding| !binding.keys.is_empty())
+        .map(|binding| format!("{} {}", binding.keys, binding.text))
+    {
+        match lines.last_mut() {
+            Some(line)
+                if UnicodeWidthStr::width(line.as_str())
+                    + 3
+                    + UnicodeWidthStr::width(item.as_str())
+                    <= width =>
+            {
+                line.push_str(" · ");
+                line.push_str(&item);
+            }
+            _ => lines.push(item),
+        }
+    }
+    lines
 }
 
 /// 主界面底栏的简写提示。

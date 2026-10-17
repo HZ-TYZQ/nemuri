@@ -13,7 +13,7 @@ use crate::track::Track;
 use super::ListView;
 use super::keymap::{
     self, DELETE_CONFIRM, ENTRY_BOUND, ENTRY_NAME, FOLDERS, HELP, Key, LIBRARY, MARK_NAME, MARKS,
-    NAME_INPUT, PICK_PLAYLIST, PLAYLIST_TRACKS, PLAYLISTS, QUEUE, SEARCH,
+    NAME_INPUT, PASTE_MARKS, PICK_PLAYLIST, PLAYLIST_TRACKS, PLAYLISTS, QUEUE, SEARCH,
 };
 use super::library::{
     INACTIVE_ICON, LIST_ICON_WIDTH, PAUSE_ACTION_ICON, PLAY_ACTION_ICON, ProgressCell, RowText,
@@ -415,6 +415,7 @@ fn every_binding_is_reachable_in_its_table() {
         ("delete confirm", DELETE_CONFIRM, false),
         ("marks", MARKS, false),
         ("mark name", MARK_NAME, true),
+        ("paste marks", PASTE_MARKS, true),
         ("pick playlist", PICK_PLAYLIST, false),
         ("entry bound", ENTRY_BOUND, false),
         ("entry name", ENTRY_NAME, true),
@@ -425,6 +426,7 @@ fn every_binding_is_reachable_in_its_table() {
                 let event = match *key {
                     Key::Any(code) | Key::NoShift(code) => KeyEvent::new(code, KeyModifiers::NONE),
                     Key::Shift(code) => KeyEvent::new(code, KeyModifiers::SHIFT),
+                    Key::Ctrl(code) => KeyEvent::new(code, KeyModifiers::CONTROL),
                 };
                 assert_eq!(
                     keymap::lookup(table, text_input, event).as_ref(),
@@ -460,8 +462,17 @@ fn generated_hints_keep_the_overlay_wording() {
     assert_eq!(keymap::hints(NAME_INPUT), "Enter 创建 · Esc 取消");
     assert_eq!(
         keymap::hints(MARKS),
-        "Enter 跳到这里 · a 加入列表 · s/S 起点/终点 · e 改名 · d 删除 · Esc 关闭"
+        "Enter 跳到这里 · a 加入列表 · s/S 起点/终点 · e 改名 · d 删除 · v 粘贴时间轴 · Esc 关闭"
     );
+    // 跳转点面板 76 列，提示从左边框后空一列开始，一行放不下。
+    assert_eq!(
+        keymap::hint_lines(MARKS, 73),
+        [
+            "Enter 跳到这里 · a 加入列表 · s/S 起点/终点 · e 改名 · d 删除",
+            "v 粘贴时间轴 · Esc 关闭",
+        ]
+    );
+    assert_eq!(keymap::hints(PASTE_MARKS), "Ctrl+S 添加 · Esc 取消");
     assert_eq!(keymap::hints(MARK_NAME), "Enter 确定 · Esc 取消");
     assert_eq!(keymap::hints(DELETE_CONFIRM), "y 确认 · n/Esc 取消");
     assert_eq!(keymap::hints(HELP), "? / Esc 关闭");

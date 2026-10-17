@@ -87,6 +87,10 @@ pub struct ViewState {
     pub(crate) help_scroll: usize,
     /// 新建播放列表、给跳转点或列表条目改名时输入的名称。
     pub(crate) name_input: String,
+    /// 粘贴框里的时间轴原文，行之间用 `\n` 分开。
+    pub(crate) paste_text: String,
+    /// 粘贴框是为哪一项打开的：时间轴加到这个文件上。中途换了曲目也不变。
+    pub(crate) paste_for: Option<(PathBuf, Origin)>,
     /// 正要加进播放列表的片段：“加到播放列表”面板和在那里新建列表时用。
     pub(crate) clip: Option<NewClip>,
     /// 这次运行里上一次把片段加进了哪个列表，下次光标先落在它上面。

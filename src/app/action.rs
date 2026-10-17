@@ -115,6 +115,8 @@ pub enum Action {
     ToggleMarkRole(Role),
     /// 从选中的跳转点到下一个跳转点这一段加进播放列表，接着挑加到哪个列表。
     AddClip,
+    /// 打开粘贴时间轴的输入框。
+    PasteMarks,
 }
 
 impl From<MediaCommand> for Action {
@@ -234,6 +236,7 @@ impl App {
             Action::RemoveMark => self.remove_selected_mark(),
             Action::RenameMark => self.start_renaming_mark(),
             Action::ToggleMarkRole(role) => self.toggle_selected_mark_role(role),
+            Action::PasteMarks => self.start_pasting_marks(),
         }
         // 系统媒体控制可能刚切了歌，跳转点面板要跟上。
         self.sync_marks_panel();
@@ -280,6 +283,7 @@ impl App {
             Overlay::NameInput
             | Overlay::DeleteConfirm
             | Overlay::MarkName
+            | Overlay::PasteMarks
             | Overlay::EntryName => {}
         }
     }
@@ -300,6 +304,7 @@ impl App {
             | Overlay::NameInput
             | Overlay::DeleteConfirm
             | Overlay::MarkName
+            | Overlay::PasteMarks
             | Overlay::EntryName => {}
         }
     }
@@ -324,6 +329,7 @@ impl App {
             Overlay::NameInput => self.create_playlist(),
             Overlay::Marks => self.jump_to_selected_mark(),
             Overlay::MarkName => self.rename_selected_mark(),
+            Overlay::PasteMarks => self.add_pasted_marks(),
             Overlay::PickPlaylist => self.add_clip_to_selected_playlist(),
             Overlay::EntryBound => self.set_entry_bound(),
             Overlay::EntryName => self.rename_selected_entry(),
@@ -348,6 +354,7 @@ impl App {
                 self.view.overlay = Overlay::Playlists;
             }
             Overlay::MarkName => self.view.overlay = Overlay::Marks,
+            Overlay::PasteMarks => self.cancel_pasting_marks(),
             Overlay::PickPlaylist => {
                 self.view.clip = None;
                 self.view.overlay = Overlay::Marks;
@@ -363,6 +370,7 @@ impl App {
             Overlay::NameInput | Overlay::MarkName | Overlay::EntryName => {
                 self.view.name_input.push(character);
             }
+            Overlay::PasteMarks => self.push_paste_text(character.encode_utf8(&mut [0; 4])),
             Overlay::None if self.view.search_active => {
                 let mut query = self.catalog.query().to_owned();
                 query.push(character);
@@ -377,6 +385,9 @@ impl App {
             Overlay::NameInput | Overlay::MarkName | Overlay::EntryName => {
                 self.view.name_input.pop();
             }
+            Overlay::PasteMarks => {
+                self.view.paste_text.pop();
+            }
             Overlay::None if self.view.search_active => {
                 let mut query = self.catalog.query().to_owned();
                 query.pop();
@@ -386,11 +397,14 @@ impl App {
         }
     }
 
-    /// 粘贴进单行输入框时，换行和制表符换成空格，末尾的空白去掉。
-    /// 不在输入时忽略：一段文字不该被当成一串快捷键执行。
+    /// 粘贴进粘贴框时原样接上，换行统一成 `\n`；粘贴进单行输入框时，换行和制表符换成空格，
+    /// 末尾的空白去掉。不在输入时忽略：一段文字不该被当成一串快捷键执行。
     fn paste(&mut self, text: &str) {
         let line = one_line(text);
         match self.view.overlay {
+            Overlay::PasteMarks => {
+                self.push_paste_text(&text.replace("\r\n", "\n").replace('\r', "\n"));
+            }
             Overlay::NameInput | Overlay::MarkName | Overlay::EntryName => {
                 self.view.name_input.push_str(&line);
             }
