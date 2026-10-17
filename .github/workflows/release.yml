@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   metadata:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
@@ -74,7 +74,7 @@ jobs:
 
   rpm:
     needs: metadata
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     container: fedora:44
     steps:
       - name: Install build tools
@@ -155,7 +155,7 @@ jobs:
 
   publish:
     needs: [metadata, rpm, windows-package]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
         with:
