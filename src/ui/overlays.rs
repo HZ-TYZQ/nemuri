@@ -331,9 +331,15 @@ fn draw_entry_bound(frame: &mut Frame, app: &App, theme: &Theme, view: &mut List
     let title_width = usize::from(area.width)
         .saturating_sub(2 + 2 + UnicodeWidthStr::width(prefix.as_str()) + 1)
         .max(1);
-    let title = track
-        .map(|track| truncate_display(track.display_title(), title_width))
-        .unwrap_or_default();
+    // 文件不在曲库中时也能把截过的开头或结尾改回去，这时用文件名。
+    let name = match track {
+        Some(track) => track.display_title().to_owned(),
+        None => entry
+            .path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+    };
+    let title = truncate_display(&name, title_width);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Span::styled(
