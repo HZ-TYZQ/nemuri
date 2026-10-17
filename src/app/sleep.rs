@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use crate::player::PlayState;
 
 use super::App;
+use super::fade::fade_gain;
 
 /// 按 t 依次切换的定时长度（分钟），之后是“本条播完时”，再回到关闭。
 /// 淡出时长来自配置（`sleep { fade 30 }`）。
@@ -41,7 +42,7 @@ impl App {
             SleepTimer::EndOfTrack => SleepTimer::Off,
         };
         // 重新计时意味着还醒着，淡出到一半也恢复原来的音量。
-        self.set_fade_gain(1.0);
+        self.set_sleep_gain(1.0);
         let fade = self.config.sleep_fade.as_secs();
         self.view.message = Some(match self.playback.sleep {
             SleepTimer::Off => "睡眠定时已关闭".to_owned(),
@@ -95,20 +96,20 @@ impl App {
                     }
                     _ => 1.0,
                 };
-                self.set_fade_gain(gain);
+                self.set_sleep_gain(gain);
                 return;
             }
         };
         let remaining = deadline.saturating_duration_since(self.now);
         if !remaining.is_zero() {
-            self.set_fade_gain(fade_gain(remaining, self.config.sleep_fade));
+            self.set_sleep_gain(fade_gain(remaining, self.config.sleep_fade));
             return;
         }
         let playing = self.playback.player.state() == PlayState::Playing;
         // 先暂停再恢复增益：Rodio 在同一次回调里读取暂停和音量，不会漏出一下原音量。
         self.playback.player.pause();
         self.playback.sleep = SleepTimer::Off;
-        self.set_fade_gain(1.0);
+        self.set_sleep_gain(1.0);
         self.view.message = Some(
             if playing {
                 "睡眠定时到，已暂停（按空格继续）"
@@ -124,39 +125,7 @@ impl App {
         self.playback.player.stop();
         self.playback.playing_index = None;
         self.playback.sleep = SleepTimer::Off;
-        self.set_fade_gain(1.0);
+        self.set_sleep_gain(1.0);
         self.view.message = Some("睡眠定时：本条已播完，播放停止".to_owned());
-    }
-
-    fn set_fade_gain(&mut self, gain: f32) {
-        if self.playback.fade_gain != gain {
-            self.playback.fade_gain = gain;
-            self.playback.player.set_fade_gain(gain);
-        }
-    }
-}
-
-/// 剩余时间进入淡出段后，增益按剩余比例的平方下降：线性降低音量时，
-/// 听感上前半段几乎不变、最后几秒才突然变小，平方曲线听起来更均匀。
-fn fade_gain(remaining: Duration, fade: Duration) -> f32 {
-    if fade.is_zero() || remaining >= fade {
-        return 1.0;
-    }
-    let fraction = remaining.as_secs_f32() / fade.as_secs_f32();
-    fraction * fraction
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_fade_starts_at_full_volume_and_ends_silent() {
-        let fade = Duration::from_secs(30);
-        assert_eq!(fade_gain(Duration::from_secs(60), fade), 1.0);
-        assert_eq!(fade_gain(fade, fade), 1.0);
-        assert_eq!(fade_gain(Duration::from_secs(15), fade), 0.25);
-        assert_eq!(fade_gain(Duration::ZERO, fade), 0.0);
-        assert_eq!(fade_gain(Duration::from_secs(1), Duration::ZERO), 1.0);
     }
 }

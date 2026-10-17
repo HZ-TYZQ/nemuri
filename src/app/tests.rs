@@ -4763,6 +4763,127 @@ fn add_clips(app: &mut App, entries: &[(usize, u32, Option<u32>, Option<&str>)])
 
 const SECOND: Duration = Duration::from_secs(1);
 
+/// 跳到文件时间 `position` 再走一个 tick，返回交给播放器的淡出增益。
+fn gain_at(app: &mut App, control: &FakeControl, position: Duration) -> f32 {
+    assert!(app.playback.player.seek_to(position));
+    app.tick_timers(app.now);
+    control.fade_gain()
+}
+
+const HALF_SECOND: Duration = Duration::from_millis(500);
+
+#[test]
+fn a_clip_cut_from_the_middle_fades_out_and_the_next_one_fades_in() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None), (1, 2, Some(4), None)]);
+
+    // 装载之前就设好了：从中间开始的片段从无声开始，不会先漏出一下原音量。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(control.fade_gain(), 0.0);
+    // 默认淡出 3 秒，淡入 1 秒。
+    assert_eq!(gain_at(&mut app, &control, 5 * MINUTE + HALF_SECOND), 0.25);
+    assert_eq!(gain_at(&mut app, &control, 5 * MINUTE + SECOND), 1.0);
+    assert_eq!(gain_at(&mut app, &control, 10 * MINUTE), 1.0);
+    assert_eq!(
+        gain_at(&mut app, &control, 15 * MINUTE - SECOND - HALF_SECOND),
+        0.25
+    );
+    // 暂停时停在当时的音量。
+    press(&mut app, key(KeyCode::Char(' ')));
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 0.25);
+    press(&mut app, key(KeyCode::Char(' ')));
+
+    // 淡出到一半按 n：立刻换，下一条按它自己的开头从无声淡入，不停在上一条的值。
+    press(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.fade_gain(), 0.0);
+    assert_eq!(gain_at(&mut app, &control, 2 * MINUTE + SECOND), 1.0);
+}
+
+#[test]
+fn whole_entries_clips_to_the_file_end_and_library_tracks_keep_full_volume() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(2, 0, None, None), (1, 18, None, None)]);
+
+    // 整首条目：开头和结尾都不淡。
+    play_from_playlist(&mut app, 0);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(gain_at(&mut app, &control, Duration::from_secs(99)), 1.0);
+    // 放到文件结尾的片段：开头淡入，结尾不淡出。
+    play_from_playlist(&mut app, 1);
+    assert_eq!(control.fade_gain(), 0.0);
+    assert_eq!(gain_at(&mut app, &control, 20 * MINUTE - SECOND), 1.0);
+    // 曲库播放：不淡。
+    play_library_row(&mut app, 0);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(gain_at(&mut app, &control, 20 * MINUTE - SECOND), 1.0);
+}
+
+#[test]
+fn a_zero_clip_fade_turns_clip_fades_off() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig {
+        clip_fade: Duration::ZERO,
+        ..AppConfig::default()
+    });
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    assert_eq!(control.fade_gain(), 1.0);
+    assert_eq!(gain_at(&mut app, &control, 15 * MINUTE - SECOND), 1.0);
+}
+
+#[test]
+fn with_the_sleep_timer_the_quieter_fade_wins() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    sleep_at_track_end(&mut app);
+
+    // 离片段结尾 15 秒：只有睡眠定时在淡出（30 秒淡到一半）。
+    assert_eq!(gain_at(&mut app, &control, 15 * MINUTE - 15 * SECOND), 0.25);
+    // 离结尾 1.5 秒：两个都在淡，取较小的那个，不相乘。
+    let sleep = 1.5_f32 / 30.0;
+    assert_eq!(
+        gain_at(&mut app, &control, 15 * MINUTE - SECOND - HALF_SECOND),
+        sleep * sleep
+    );
+}
+
+#[test]
+fn the_volume_comes_back_once_the_playlist_has_finished() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None)]);
+    play_from_playlist(&mut app, 0);
+    assert!(gain_at(&mut app, &control, 15 * MINUTE - HALF_SECOND / 5) < 0.01);
+
+    control.finish_track();
+    app.drain_player_events();
+    assert_eq!(app.player().state(), PlayState::Stopped);
+    app.tick_timers(app.now);
+    assert_eq!(control.fade_gain(), 1.0);
+}
+
+#[test]
+fn a_clip_that_fails_to_load_leaves_the_playing_one_audible() {
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    let paths = recordings_fixture(&mut app, &temp.path().join("music"));
+    add_clips(&mut app, &[(0, 5, Some(15), None), (1, 2, Some(4), None)]);
+    play_from_playlist(&mut app, 0);
+    press(&mut app, key(KeyCode::Char('n')));
+    assert_eq!(gain_at(&mut app, &control, 3 * MINUTE), 1.0);
+
+    // p 退回上一条，它的文件没了：还在放的这一条照常有声音，不用等下一个 tick。
+    std::fs::remove_file(&paths[0]).unwrap();
+    press(&mut app, key(KeyCode::Char('p')));
+    assert_eq!(app.playback.playing_index, Some(1));
+    assert_eq!(control.fade_gain(), 1.0);
+}
+
 #[test]
 fn a_clip_plays_in_its_own_time_from_its_start_to_its_end() {
     let (temp, mut app, control) = test_app_with_control(AppConfig::default());

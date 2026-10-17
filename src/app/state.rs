@@ -42,7 +42,10 @@ pub struct Playback {
     /// 等待交给系统媒体会话的事件。
     pub(super) media_events: Vec<MediaEvent>,
     pub(super) sleep: SleepTimer,
-    /// 最近一次交给后端的淡出增益，没变时不重复设置。
+    /// 睡眠定时和片段切换各自的淡出增益，见 `fade.rs`。
+    pub(super) sleep_gain: f32,
+    pub(super) clip_gain: f32,
+    /// 最近一次交给后端的淡出增益（上面两个里较小的），没变时不重复设置。
     pub(super) fade_gain: f32,
 }
 
@@ -61,6 +64,8 @@ impl Playback {
             lyrics: None,
             media_events: Vec::new(),
             sleep: SleepTimer::Off,
+            sleep_gain: 1.0,
+            clip_gain: 1.0,
             fade_gain: 1.0,
         }
     }

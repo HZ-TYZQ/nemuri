@@ -2,6 +2,7 @@
 
 mod action;
 mod catalog;
+mod fade;
 mod folders;
 mod lyrics;
 mod marks;
@@ -265,10 +266,11 @@ impl App {
         }
     }
 
-    /// 随时间推进的状态：睡眠定时和收听进度。与扫描、搜索分开，测试可以只推进时间。
+    /// 随时间推进的状态：睡眠定时、片段淡入淡出和收听进度。与扫描、搜索分开，测试可以只推进时间。
     pub(super) fn tick_timers(&mut self, now: Instant) {
         self.now = now;
         self.tick_sleep();
+        self.tick_clip_fade();
         self.tick_progress();
     }
 

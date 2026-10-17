@@ -140,6 +140,7 @@ impl App {
             Origin::Library => (self.opening(index), false),
             Origin::Entry { range, .. } => (Opening::Clip(range.start), true),
         };
+        self.prepare_clip_fade(&origin);
         match self.load_track(&path, autoplay, opening.position(), exact) {
             Ok(opened_at) => {
                 self.playback.loads += 1;
@@ -168,7 +169,11 @@ impl App {
                 }
                 Ok(())
             }
-            Err(error) => Err(Skip::new(title, short_reason(&error, &path))),
+            Err(error) => {
+                // 旧的那一条还在放，按它重新算。
+                self.tick_clip_fade();
+                Err(Skip::new(title, short_reason(&error, &path)))
+            }
         }
     }
 

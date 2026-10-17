@@ -74,7 +74,7 @@ impl FakeBackend {
 }
 
 impl FakeControl {
-    /// 睡眠定时最近一次设置的淡出增益。
+    /// 最近一次设置的淡出增益：睡眠定时和片段淡入淡出里较小的那个。
     pub(crate) fn fade_gain(&self) -> f32 {
         self.0.borrow().fade_gain
     }
