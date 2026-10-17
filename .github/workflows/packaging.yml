@@ -101,3 +101,40 @@ jobs:
           name: windows-packages-ci
           path: ${{ runner.temp }}/windows-dist/*
           if-no-files-found: ignore
+
+  # Termux packages for phones (aarch64) and for x86_64, which Termux's
+  # container runs, so that one is installed and started there. Mirrors the
+  # Release steps.
+  termux-deb:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      # The runner's default NDK is older than the one Termux builds with.
+      # The container has no libaaudio; the NDK's stub only lets programs load.
+      - name: Select the NDK
+        run: |
+          grep Pkg.Revision "$ANDROID_NDK_LATEST_HOME/source.properties"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          echo "AAUDIO_STUB=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/26/libaaudio.so" >> "$GITHUB_ENV"
+      - name: Build packages
+        run: |
+          mkdir -p "$RUNNER_TEMP/termux-dist"
+          for arch in aarch64 x86_64; do
+            cp "$(packaging/termux/build.sh deb "$arch")" "$RUNNER_TEMP/termux-dist/"
+          done
+      - name: Install and start the x86_64 package in Termux
+        run: >-
+          docker run --rm --security-opt seccomp=unconfined
+          -v "$RUNNER_TEMP/termux-dist:/debs:ro"
+          -v "$AAUDIO_STUB:/system/lib64/libaaudio.so:ro"
+          termux/termux-docker:x86_64
+          bash -c 'apt-get update && apt-get install -y /debs/nemuri_*_x86_64.deb && nemuri --version && nemuri --help > /dev/null'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: termux-debs-ci
+          path: ${{ runner.temp }}/termux-dist/*.deb
+          if-no-files-found: error
