@@ -1742,7 +1742,8 @@ fn the_lyrics_key_hides_lyrics_and_the_choice_is_saved() {
 #[test]
 fn plain_lyrics_fill_the_pane_and_scroll_with_the_progress() {
     let (temp, mut app) = test_app(AppConfig::default());
-    let text: String = (1..=40).map(|line| format!("L{line:02}\n")).collect();
+    // 行文用汉字：画面上方显示曲库路径，临时目录名是随机的字母和数字，可能碰巧含有 “L2” 之类。
+    let text: String = (1..=40).map(|line| format!("第{line:02}行\n")).collect();
     std::fs::write(temp.path().join("music").join("long.lrc"), text).unwrap();
     play_long_track_at(temp.path(), &mut app, Duration::from_secs(50));
     app.sync_lyrics();
@@ -1753,19 +1754,20 @@ fn plain_lyrics_fill_the_pane_and_scroll_with_the_progress() {
     assert!(rows[0].contains("歌词·纯文本"), "标题是 {:?}", rows[0]);
     // 40 行放不下：播放到一半时开头和结尾都滚出去了，中间那段可见。
     let visible = |label: &str| rows.iter().any(|row| row.contains(label));
-    assert!(!visible("L01") && !visible("L40"));
-    assert!(visible("L20"));
+    assert!(!visible("第01行") && !visible("第40行"));
+    assert!(visible("第20行"));
     let bold = (0..backend.buffer().area.width).any(|column| {
         (1..29).any(|row| {
             let cell = &backend.buffer()[(column, row)];
-            cell.symbol() == "L" && cell.modifier.contains(ratatui::style::Modifier::BOLD)
+            cell.symbol() == "第" && cell.modifier.contains(ratatui::style::Modifier::BOLD)
         })
     });
     assert!(!bold, "纯文本没有当前行，不应加粗");
 
     // 窄终端的播放区边框只显示同步歌词的当前行。
     let (_, backend) = render(&app, 80, 24);
-    assert!(!screen_rows(&backend).iter().any(|row| row.contains("L2")));
+    let lyric_shown = |row: &String| (1..=40).any(|line| row.contains(&format!("第{line:02}行")));
+    assert!(!screen_rows(&backend).iter().any(lyric_shown));
 }
 
 #[test]

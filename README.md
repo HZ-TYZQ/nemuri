@@ -4,7 +4,7 @@ Nemuri（眠り，睡眠）是为 ASMR 长录音设计的终端播放器，也�
 
 - 适合按创作者分文件夹整理的音乐库
 - 支持 MP3、FLAC、WAV、OGG/OGA Vorbis、M4A/AAC、AAC ADTS 和 AIFF
-- 支持 Fedora 44 和 Windows 11（x86_64）
+- 支持 Fedora 44、Windows 11（x86_64）和 Android 8 及以上的 Termux
 
 1.4.0 及以前叫 Music Player，升级说明见[下文](#从-music-player-升级)。
 
@@ -27,8 +27,12 @@ Nemuri（眠り，睡眠）是为 ASMR 长录音设计的终端播放器，也�
 |---|---|
 | Fedora 44 | `sudo dnf install ./nemuri-<版本>-1.fc44.x86_64.rpm` |
 | Windows 11 | 运行 `nemuri-<版本>-windows-x86_64-setup.exe`，装到当前用户，不需要管理员权限；<br>或者解压 `…-portable.zip`，运行 `nemuri.cmd` |
+| Android（Termux） | `apt install ./nemuri_<版本>_aarch64.deb`（x86_64 的设备用 `…_x86_64.deb`），再运行一次 `termux-setup-storage` 允许访问存储 |
 
 Windows 安装包尚未签名，SmartScreen 可能提示“未知发布者”。
+
+在 Termux 里默认打开共享存储的 Music 目录（`~/storage/music`）。没有通知栏和锁屏上的播放控制；
+熄屏后要继续播放，先运行 `termux-wake-lock`。
 
 ## 使用
 
@@ -104,6 +108,7 @@ Nemuri 不会往音乐库里写任何文件。
 | 曲库缓存（可删） | `~/.cache/nemuri/library.sqlite3` | `%LOCALAPPDATA%\nemuri\library.sqlite3` |
 
 - Linux 上设置了 `XDG_CONFIG_HOME`、`XDG_DATA_HOME` 或 `XDG_CACHE_HOME` 时，用这些目录。
+- Termux 里和 Linux 一样，在 Termux 自己的主目录下。
 - 升级和卸载都不会删除这些文件。
 - 2.2.0 起播放列表改用新格式。旧列表照常能读，但改动过的列表，2.0.0 及更早的版本就读不了了。
 
@@ -124,7 +129,11 @@ cargo test --all-targets --locked
 ./packaging/build-rpm.sh    # 生成 RPM 和 SRPM
 ```
 
-Windows 版由 GitHub Actions 构建和打包。
+Windows 版和 Termux 包由 GitHub Actions 构建和打包。Termux 包也可以在容器里交叉编译，需要 Android NDK：
+
+```sh
+./packaging/termux/build.sh deb aarch64    # 生成 Termux 的 .deb
+```
 
 ## 许可证
 

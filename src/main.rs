@@ -20,6 +20,12 @@ use nemuri::config::{self, AppConfig, AppPaths, LoadedConfig};
 use nemuri::media::{MediaEvent, MediaSession};
 use nemuri::ui::{self, MouseInput, ViewLayout};
 
+/// Termux 先要运行 `termux-setup-storage` 才能读共享存储，默认的 `~/storage/music` 也是它建的。
+#[cfg(target_os = "android")]
+const STORAGE_HINT: &str = "；在 Termux 里先运行 termux-setup-storage 允许访问共享存储";
+#[cfg(not(target_os = "android"))]
+const STORAGE_HINT: &str = "";
+
 fn main() -> ExitCode {
     match run_application() {
         Ok(()) => ExitCode::SUCCESS,
@@ -52,14 +58,18 @@ fn run_application() -> Result<(), String> {
         validate_directory(&path).map_err(|error| error.to_string())?
     } else if let Some(path) = config.library_dir.as_ref() {
         validate_directory(path).map_err(|error| {
-            format!("配置的主音乐库不可用: {error}。请使用 --set-library PATH 设置新目录")
+            format!(
+                "配置的主音乐库不可用: {error}。请使用 --set-library PATH 设置新目录{STORAGE_HINT}"
+            )
         })?
     } else {
         let path = paths.default_music_dir.as_ref().ok_or_else(|| {
             "系统没有提供默认 Music 目录，请使用 --set-library PATH 设置主音乐库".to_owned()
         })?;
         validate_directory(path).map_err(|error| {
-            format!("默认 Music 目录不可用: {error}。请使用 --set-library PATH 设置主音乐库")
+            format!(
+                "默认 Music 目录不可用: {error}。请使用 --set-library PATH 设置主音乐库{STORAGE_HINT}"
+            )
         })?
     };
 
