@@ -211,9 +211,10 @@ impl App {
                 None
             }
         };
-        // 曲库播放从起点或记下的位置开始时淡入，退回 0:00 的不淡；片段按自己的开头淡入。
+        // 曲库播放从起点或记下的位置开始时淡入；从 0:00 开始的不淡，包括起点就在 0:00、
+        // 打不开退回 0:00 的。片段按自己的开头淡入。
         self.playback.fade_in_from = match origin {
-            Origin::Library => opened,
+            Origin::Library => opened.filter(|position| !position.is_zero()),
             Origin::Entry { .. } => None,
         };
         self.set_clip_gain(self.starting_clip_gain(origin));

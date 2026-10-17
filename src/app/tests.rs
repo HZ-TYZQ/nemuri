@@ -5260,6 +5260,22 @@ fn a_jump_that_lands_inside_the_fade_in_ends_it_too() {
 }
 
 #[test]
+fn a_start_point_at_0_00_does_not_fade_in() {
+    // BUG-021：起点就在 0:00 时，从起点装载就是从 0:00 开始，不淡入。
+    let (temp, mut app, control) = test_app_with_control(AppConfig::default());
+    recordings_fixture(&mut app, &temp.path().join("music"));
+    app.play_index(0, false, BagUpdate::Reanchor).unwrap();
+    press(&mut app, key(KeyCode::Char('(')));
+    assert_eq!(mark_positions(&app), [Duration::ZERO]);
+    assert_eq!(app.current_marks()[0].role, Role::Start);
+
+    reload_rec1(&mut app);
+    assert_eq!(app.player().position(), Duration::ZERO);
+    assert_eq!(control.gain_when_resumed(), Some(1.0));
+    assert_eq!(gain_at(&mut app, &control, HALF_SECOND), 1.0);
+}
+
+#[test]
 fn setting_the_start_or_end_point_where_playback_is_keeps_the_volume() {
     let (temp, mut app, control) = test_app_with_control(AppConfig::default());
     marks_fixture(
