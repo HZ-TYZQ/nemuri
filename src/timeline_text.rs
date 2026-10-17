@@ -3,6 +3,8 @@
 //! 只认位置，不认时长：DLsite 曲目表里“タイトル (12:34)”这样的时长也会被当成位置，
 //! 粘贴框里的识别结果让人在添加前看出来。
 
+use std::collections::BTreeSet;
+use std::ops::Bound;
 use std::time::Duration;
 
 use crate::marks::SAME_SPOT;
@@ -30,17 +32,24 @@ pub struct Parsed {
 
 /// 逐行认出时间和名字。认不出时间的行跳过；和前面认出的相距不到 [`SAME_SPOT`] 的只取前面那个。
 pub fn parse(text: &str) -> Vec<Parsed> {
-    let mut parsed: Vec<Parsed> = Vec::new();
+    let mut parsed = Vec::new();
+    // 已经取了的位置按大小存着，查离得近的只要看前后 1 秒以内，长时间轴也不用逐个比。
+    let mut taken = BTreeSet::new();
     for (line, text) in text.lines().enumerate() {
         let Some((position, name)) = parse_line(text) else {
             continue;
         };
-        if parsed
-            .iter()
-            .any(|earlier| earlier.position.abs_diff(position) < SAME_SPOT)
+        let low = position
+            .checked_sub(SAME_SPOT)
+            .map_or(Bound::Unbounded, Bound::Excluded);
+        if taken
+            .range((low, Bound::Excluded(position + SAME_SPOT)))
+            .next()
+            .is_some()
         {
             continue;
         }
+        taken.insert(position);
         parsed.push(Parsed {
             position,
             name,
@@ -324,6 +333,12 @@ mod tests {
                     line: 6,
                 },
             ]
+        );
+        // 不挨着的两行也一样，不论在前还是在后。
+        let later = parse("03:21 a\n10:00 b\n03:21.5 c\n03:20.2 d\n03:20 e");
+        assert_eq!(
+            later.iter().map(|parsed| parsed.line).collect::<Vec<_>>(),
+            [0, 1, 4]
         );
         assert!(recognizes("03:21.5 重复"));
         assert!(!recognizes("没有时间"));

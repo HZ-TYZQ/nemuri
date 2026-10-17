@@ -3600,6 +3600,36 @@ fn the_paste_box_takes_typed_lines_and_stays_open_until_something_can_be_added()
 }
 
 #[test]
+fn the_paste_box_reparses_only_when_its_text_changes() {
+    let (temp, mut app) = test_app(AppConfig::default());
+    marks_fixture(&mut app, &temp.path().join("music"), &[], 2 * MINUTE);
+    press(&mut app, key(KeyCode::Char('B')));
+    paste_timeline(&mut app, "03:00 a\n04:00 b");
+    assert_eq!(app.view.paste_parsed.len(), 2);
+    // 退格删掉第二行，识别结果跟着变。
+    for _ in 0.."\n04:00 b".chars().count() {
+        press(&mut app, key(KeyCode::Backspace));
+    }
+    assert_eq!(app.view.paste_text, "03:00 a");
+    assert_eq!(app.view.paste_parsed.len(), 1);
+
+    // 已有的跳转点变了，摘要现查，跟着变。
+    let track = app.catalog.tracks()[0].clone();
+    app.marks.store.add(&track, 3 * MINUTE).unwrap();
+    assert_eq!(
+        app.paste_summary(),
+        PasteSummary {
+            recognized: 1,
+            new: 0,
+            existing: 1,
+            beyond: 0,
+        }
+    );
+    press(&mut app, key(KeyCode::Esc));
+    assert!(app.view.paste_parsed.is_empty());
+}
+
+#[test]
 fn a_paste_longer_than_the_limit_keeps_only_the_start() {
     let (temp, mut app) = test_app(AppConfig::default());
     marks_fixture(&mut app, &temp.path().join("music"), &[], 2 * MINUTE);

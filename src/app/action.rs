@@ -385,9 +385,9 @@ impl App {
             Overlay::NameInput | Overlay::MarkName | Overlay::EntryName => {
                 self.view.name_input.pop();
             }
-            Overlay::PasteMarks => {
-                self.view.paste_text.pop();
-            }
+            Overlay::PasteMarks => self.edit_paste_text(|text| {
+                text.pop();
+            }),
             Overlay::None if self.view.search_active => {
                 let mut query = self.catalog.query().to_owned();
                 query.pop();

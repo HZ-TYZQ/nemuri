@@ -225,10 +225,7 @@ impl MarkStore {
         let mut result = AddedMarks::default();
         for (position, name) in new {
             let position = Duration::from_millis(millis(*position));
-            if marks
-                .iter()
-                .any(|mark| mark.position.abs_diff(position) < SAME_SPOT)
-            {
+            if has_mark_near(&marks, position) {
                 result.existing += 1;
                 continue;
             }
@@ -404,6 +401,16 @@ fn millis(duration: Duration) -> u64 {
 }
 
 /// 时长以内的跳转点。文件被剪短后，超出时长的跳转点留着，但不显示也不参与跳转。
+/// 按位置排好的 `marks` 里有没有离 `position` 不到 [`SAME_SPOT`] 的。只看紧挨着它两边的两个。
+pub fn has_mark_near(marks: &[Mark], position: Duration) -> bool {
+    let index = marks.partition_point(|mark| mark.position < position);
+    [index.checked_sub(1), Some(index)]
+        .into_iter()
+        .flatten()
+        .filter_map(|index| marks.get(index))
+        .any(|mark| mark.position.abs_diff(position) < SAME_SPOT)
+}
+
 pub fn within(marks: &[Mark], duration: Duration) -> &[Mark] {
     &marks[..marks.partition_point(|mark| mark.position < duration)]
 }
@@ -571,6 +578,24 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_mark_near_a_position_is_found_on_either_side() {
+        let marks = [at(5), at(10)];
+        assert!(has_mark_near(
+            &marks,
+            10 * MINUTE - Duration::from_millis(999)
+        ));
+        assert!(has_mark_near(
+            &marks,
+            5 * MINUTE + Duration::from_millis(500)
+        ));
+        assert!(has_mark_near(&marks, 10 * MINUTE));
+        assert!(!has_mark_near(&marks, 10 * MINUTE + SECOND));
+        assert!(!has_mark_near(&marks, Duration::ZERO));
+        assert!(!has_mark_near(&marks, 7 * MINUTE));
+        assert!(!has_mark_near(&[], 7 * MINUTE));
     }
 
     #[test]

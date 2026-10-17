@@ -14,11 +14,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::marks::{self, AddError, Bounds, Mark, MarkStore, Role, RoleError, SAME_SPOT};
+use crate::marks::{self, AddError, Bounds, Mark, MarkStore, Role, RoleError};
 use crate::player::PlayState;
 use crate::playlist::Range;
 use crate::progress;
-use crate::timeline_text;
+use crate::timeline_text::{self, Parsed};
 use crate::track::{Track, fmt_duration};
 
 use super::playlists::NewClip;
@@ -60,6 +60,14 @@ impl PasteSummary {
         }
         parts
     }
+}
+
+/// 粘贴框里认出的一个算哪一类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PasteKind {
+    New,
+    Existing,
+    Beyond,
 }
 
 /// 确定添加时要用的：加到哪首，加哪些。
@@ -494,39 +502,57 @@ impl App {
         if self.mark_target().is_err() {
             return;
         }
-        self.view.paste_text.clear();
+        self.edit_paste_text(String::clear);
         self.view.paste_for = self.marks_owner();
         self.view.overlay = Overlay::PasteMarks;
     }
 
     /// 粘贴框里的 Esc：回到面板，内容不留。
     pub(super) fn cancel_pasting_marks(&mut self) {
-        self.view.paste_text.clear();
+        self.edit_paste_text(String::clear);
         self.view.overlay = Overlay::Marks;
     }
 
     /// 接在粘贴框的末尾；超过 [`PASTE_LIMIT`] 的部分不要，并说明。
     pub(super) fn push_paste_text(&mut self, text: &str) {
         let room = PASTE_LIMIT.saturating_sub(self.view.paste_text.len());
-        if text.len() <= room {
-            self.view.paste_text.push_str(text);
-            return;
-        }
-        let cut = text
-            .char_indices()
-            .map(|(index, character)| index + character.len_utf8())
-            .take_while(|end| *end <= room)
-            .last()
-            .unwrap_or(0);
-        self.view.paste_text.push_str(&text[..cut]);
-        self.view.message = Some("内容太长，只保留了前面的部分".to_owned());
+        let cut = if text.len() <= room {
+            text.len()
+        } else {
+            self.view.message = Some("内容太长，只保留了前面的部分".to_owned());
+            text.char_indices()
+                .map(|(index, character)| index + character.len_utf8())
+                .take_while(|end| *end <= room)
+                .last()
+                .unwrap_or(0)
+        };
+        self.edit_paste_text(|pasted| pasted.push_str(&text[..cut]));
     }
 
-    /// 粘贴框里认出了几个，会加几个，跳过几个。界面每一帧都用。
+    /// 改动粘贴框的内容并重新识别。识别结果存下来，界面每一帧只数一数，不重新识别。
+    pub(super) fn edit_paste_text(&mut self, edit: impl FnOnce(&mut String)) {
+        edit(&mut self.view.paste_text);
+        self.view.paste_parsed = timeline_text::parse(&self.view.paste_text);
+    }
+
+    /// 粘贴框里认出了几个，会加几个，跳过几个。界面每一帧都用，所以只数存下的识别结果；
+    /// 已有的跳转点和时长每次现查，它们变了也跟着变。
     pub fn paste_summary(&self) -> PasteSummary {
-        self.paste_plan()
-            .map(|plan| plan.summary)
-            .unwrap_or_default()
+        let Some((_, kinds)) = self.classified_paste() else {
+            return PasteSummary::default();
+        };
+        let mut summary = PasteSummary {
+            recognized: self.view.paste_parsed.len(),
+            ..PasteSummary::default()
+        };
+        for (_, kind) in kinds {
+            match kind {
+                PasteKind::New => summary.new += 1,
+                PasteKind::Existing => summary.existing += 1,
+                PasteKind::Beyond => summary.beyond += 1,
+            }
+        }
+        summary
     }
 
     /// 粘贴框里的时间轴要加到的那一首；已经不在曲库里时为 None。
@@ -544,38 +570,40 @@ impl App {
         }
     }
 
-    /// 按粘贴框现在的内容，算出要加到哪首、加哪些。那首已经不在曲库里时为 None。
-    fn paste_plan(&self) -> Option<PastePlan> {
-        let track = self.paste_track()?.clone();
+    /// 粘贴框里认出的每一个算新的、已有的还是超出时长的，连同要加到的那一首。
+    /// 那首已经不在曲库里、或者不知道时长时为 None。
+    fn classified_paste(&self) -> Option<(&Track, impl Iterator<Item = (&Parsed, PasteKind)>)> {
+        let track = self.paste_track()?;
         // 还在放这一首时用播放器的时长，和面板一致；否则用扫描到的。
         let duration = match self.current_track() {
             Some(current) if current.path == track.path => self.effective_duration(),
             _ => track.duration,
         }?;
         let existing = self.marks.store.marks(&track.path);
-        let parsed = timeline_text::parse(&self.view.paste_text);
-        let mut summary = PasteSummary {
-            recognized: parsed.len(),
-            ..PasteSummary::default()
-        };
-        let mut new = Vec::new();
-        for parsed in parsed {
-            if parsed.position >= duration {
-                summary.beyond += 1;
-            } else if existing
-                .iter()
-                .any(|mark| mark.position.abs_diff(parsed.position) < SAME_SPOT)
-            {
-                summary.existing += 1;
+        let kinds = self.view.paste_parsed.iter().map(move |parsed| {
+            let kind = if parsed.position >= duration {
+                PasteKind::Beyond
+            } else if marks::has_mark_near(existing, parsed.position) {
+                PasteKind::Existing
             } else {
-                new.push((parsed.position, parsed.name));
-            }
-        }
-        summary.new = new.len();
+                PasteKind::New
+            };
+            (parsed, kind)
+        });
+        Some((track, kinds))
+    }
+
+    /// 确定添加时：要加到哪首、加哪些。那首已经不在曲库里时为 None。
+    fn paste_plan(&self) -> Option<PastePlan> {
+        let (track, kinds) = self.classified_paste()?;
+        let new = kinds
+            .filter(|(_, kind)| *kind == PasteKind::New)
+            .map(|(parsed, _)| (parsed.position, parsed.name.clone()))
+            .collect();
         Some(PastePlan {
-            track,
+            track: track.clone(),
             new,
-            summary,
+            summary: self.paste_summary(),
         })
     }
 
@@ -628,7 +656,7 @@ impl App {
         if !details.is_empty() {
             message.push_str(&format!("（{}）", details.join("，")));
         }
-        self.view.paste_text.clear();
+        self.edit_paste_text(String::clear);
         self.view.overlay = Overlay::Marks;
         if let Some(row) = added.iter().min().and_then(|first| {
             self.current_marks()
