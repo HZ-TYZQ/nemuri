@@ -207,6 +207,12 @@ impl Reader<'_> {
                     }
                 }
                 "swap-channels" => self.flag(node, &mut config.swap_channels),
+                // 片段淡出最多 30 秒，再长就占掉片段的一大段了。
+                "clip-fade" => {
+                    if let Some(fade) = self.seconds(node, 30) {
+                        config.clip_fade = fade;
+                    }
+                }
                 _ => self.unknown(node),
             }
         }
@@ -252,8 +258,9 @@ impl Reader<'_> {
     fn sleep(&mut self, section: &KdlNode, config: &mut AppConfig) {
         for node in children(section) {
             match name(node) {
+                // 上限 600 秒，比最短的 15 分钟定时短得多，淡出不会从按下就开始。
                 "fade" => {
-                    if let Some(fade) = self.fade(node) {
+                    if let Some(fade) = self.seconds(node, 600) {
                         config.sleep_fade = fade;
                     }
                 }
@@ -262,19 +269,23 @@ impl Reader<'_> {
         }
     }
 
-    /// 淡出的秒数。上限 600 秒，比最短的 15 分钟定时短得多，淡出不会从按下就开始。
-    fn fade(&mut self, node: &KdlNode) -> Option<Duration> {
+    /// 0 到 `max` 的整数秒，用于淡出时长。
+    fn seconds(&mut self, node: &KdlNode, max: u64) -> Option<Duration> {
         let entry = self.argument(node)?;
         let seconds = match entry.value() {
             KdlValue::Integer(value) => {
-                u64::try_from(*value).ok().filter(|seconds| *seconds <= 600)
+                u64::try_from(*value).ok().filter(|seconds| *seconds <= max)
             }
             _ => None,
         };
         if seconds.is_none() {
             self.problem(
                 node,
-                format_args!("fade 的值 {} 应为 0–600 的整数（秒），已忽略", shown(entry)),
+                format_args!(
+                    "{} 的值 {} 应为 0–{max} 的整数（秒），已忽略",
+                    name(node),
+                    shown(entry)
+                ),
             );
         }
         seconds.map(Duration::from_secs)
@@ -789,6 +800,24 @@ mod tests {
     }
 
     #[test]
+    fn the_clip_fade_accepts_zero_to_thirty_seconds() {
+        let fade = |text: &str| read(&format!("playback {{\n    clip-fade {text}\n}}\n"));
+        assert_eq!(read("").config.clip_fade, Duration::from_secs(3));
+        assert_eq!(fade("0").config.clip_fade, Duration::ZERO);
+        assert_eq!(fade("30").config.clip_fade, Duration::from_secs(30));
+        for wrong in ["31", "-1", "1.5", "\"3\""] {
+            let loaded = fade(wrong);
+            assert_eq!(loaded.config.clip_fade, Duration::from_secs(3), "{wrong}");
+            assert_eq!(
+                loaded.message.unwrap(),
+                format!(
+                    "config.kdl 有误: 第 2 行 clip-fade 的值 {wrong} 应为 0–30 的整数（秒），已忽略"
+                ),
+            );
+        }
+    }
+
+    #[test]
     fn the_sleep_fade_accepts_zero_to_ten_minutes() {
         let fade = |text: &str| read(&format!("sleep {{\n    fade {text}\n}}\n"));
         assert_eq!(fade("0").config.sleep_fade, Duration::ZERO);
@@ -817,6 +846,7 @@ mod tests {
                 shuffle #true
                 balance -30
                 swap-channels #true
+                clip-fade 5
             }
             sort "album" descending=#true
             interface {
@@ -856,6 +886,7 @@ mod tests {
                 lyrics_enabled: false,
                 privacy: true,
                 sleep_fade: Duration::from_secs(45),
+                clip_fade: Duration::from_secs(5),
                 theme,
             }
         );

@@ -97,6 +97,9 @@ pub struct AppConfig {
     pub privacy: bool,
     /// 睡眠定时到点前淡出的时长。启动时读取，运行中不会改变，也从不写回。
     pub sleep_fade: Duration,
+    /// 播放列表里截在中间的片段结尾淡出的时长；从中间开始的片段用它的三分之一淡入。
+    /// 启动时读取，运行中不会改变，也从不写回。
+    pub clip_fade: Duration,
     /// 启动时按 `theme {}` 得出，运行中不会改变，也从不写回。
     pub theme: Theme,
 }
@@ -117,6 +120,7 @@ impl Default for AppConfig {
             lyrics_enabled: true,
             privacy: false,
             sleep_fade: Duration::from_secs(30),
+            clip_fade: Duration::from_secs(3),
             theme: Theme::default(),
         }
     }

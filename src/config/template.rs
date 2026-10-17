@@ -30,6 +30,9 @@ playback {{
     balance {balance}
     // 互换左右声道（w），耳机戴反时用
     swap-channels {swap_channels}
+    // 播放列表里截在中间的片段：放到结尾时淡出的秒数，0–30；0 表示不淡。
+    // 下一段从录音中间开始时，用它的三分之一淡入
+    clip-fade {clip_fade}
 }}
 
 // 曲库排序："path"、"title"、"artist"、"album" 或 "duration"
@@ -76,6 +79,7 @@ theme {{
         mouse = flag(config.mouse_enabled),
         privacy = flag(config.privacy),
         fade = config.sleep_fade.as_secs(),
+        clip_fade = config.clip_fade.as_secs(),
     )
 }
 
@@ -109,6 +113,7 @@ mod tests {
                 lyrics_enabled: false,
                 privacy: true,
                 sleep_fade: std::time::Duration::from_secs(90),
+                clip_fade: std::time::Duration::from_secs(10),
                 theme: Theme::default(),
             },
         ];
