@@ -1,5 +1,9 @@
-use std::io::{self, stdout};
+use std::io::{self, Write, stdout};
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
@@ -24,9 +28,48 @@ fn main() -> ExitCode {
     match run_application() {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("nemuri: {error}");
+            report(&error);
             ExitCode::FAILURE
         }
+    }
+}
+
+/// 终端挂断后标准错误也写不进去；`eprintln!` 写失败会 panic，排在后面的保存就做不成了。
+fn report(error: &str) {
+    let _ = writeln!(io::stderr(), "nemuri: {error}");
+}
+
+/// 终端挂断（关掉终端窗口、终端会话结束，SIGHUP）或收到 SIGTERM 时，照常保存再退出。
+/// 默认的处理是直接结束进程，会话和运行中改过的设置都来不及保存。
+/// 不管 SIGINT：原始模式下 Ctrl+C 是按键，不是信号。
+#[derive(Default)]
+struct Termination {
+    hangup: Arc<AtomicBool>,
+    terminate: Arc<AtomicBool>,
+}
+
+impl Termination {
+    #[cfg(unix)]
+    fn register() -> io::Result<Self> {
+        use signal_hook::consts::{SIGHUP, SIGTERM};
+        let termination = Self::default();
+        signal_hook::flag::register(SIGHUP, Arc::clone(&termination.hangup))?;
+        signal_hook::flag::register(SIGTERM, Arc::clone(&termination.terminate))?;
+        Ok(termination)
+    }
+
+    #[cfg(not(unix))]
+    fn register() -> io::Result<Self> {
+        Ok(Self::default())
+    }
+
+    fn requested(&self) -> bool {
+        self.hung_up() || self.terminate.load(Ordering::Relaxed)
+    }
+
+    /// 终端已经没了：不能再往里写，写终端出的错也不算失败。
+    fn hung_up(&self) -> bool {
+        self.hangup.load(Ordering::Relaxed)
     }
 }
 
@@ -76,42 +119,74 @@ fn run_application() -> Result<(), String> {
             None
         }
     };
+    let termination =
+        Termination::register().map_err(|error| format!("无法注册信号处理: {error}"))?;
     let mut terminal = setup_terminal().map_err(|error| format!("无法初始化终端: {error}"))?;
-    let run_result = run(&mut terminal, &mut app, session.as_ref())
+    let run_result = run(&mut terminal, &mut app, session.as_ref(), &termination)
         .map_err(|error| format!("终端运行失败: {error}"));
-    let restore_result =
-        restore_terminal(&mut terminal).map_err(|error| format!("无法恢复终端状态: {error}"));
+    let hung_up = termination.hung_up();
+    let restore_result = if hung_up {
+        // 也不让 `Terminal` 析构：它会去显示光标，写失败时用 `eprintln!` 报告。
+        std::mem::forget(terminal);
+        Ok(())
+    } else {
+        restore_terminal(&mut terminal).map_err(|error| format!("无法恢复终端状态: {error}"))
+    };
     let save_result = app.save_settings();
     // 播放列表这里只是重试没存上的改动；会话、收听进度和跳转点只是便利功能。
     // 这些保存失败都不应让整个程序以失败退出。
     if let Err(error) = app.save_playlists() {
-        eprintln!("nemuri: {error}");
+        report(&error);
     }
     if let Err(error) = app.save_session() {
-        eprintln!("nemuri: {error}");
+        report(&error);
     }
     if let Err(error) = app.save_progress() {
-        eprintln!("nemuri: {error}");
+        report(&error);
     }
     if let Err(error) = app.save_marks() {
-        eprintln!("nemuri: {error}");
+        report(&error);
     }
 
-    run_result?;
-    restore_result?;
+    // 挂断时正在画的那一帧会写失败，这不是程序出错。
+    if !hung_up {
+        run_result?;
+        restore_result?;
+    }
     save_result?;
     Ok(())
+}
+
+/// 在单独的线程里读终端事件。终端挂断后 crossterm 0.29 读到 EOF 会在 `event::poll`
+/// 里一直空转、不再返回；读事件放在这里，主循环总能按时醒来，看到挂断后照常保存退出。
+/// 线程不用等它结束，进程退出时一起结束。
+fn spawn_input_reader() -> io::Result<Receiver<io::Result<Event>>> {
+    let (events, receiver) = mpsc::channel();
+    thread::Builder::new()
+        .name("terminal-input".to_owned())
+        .spawn(move || {
+            loop {
+                let event = event::read();
+                let failed = event.is_err();
+                if events.send(event).is_err() || failed {
+                    break;
+                }
+            }
+        })?;
+    Ok(receiver)
 }
 
 fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     session: Option<&MediaSession>,
+    termination: &Termination,
 ) -> io::Result<()> {
+    let input = spawn_input_reader()?;
     let mut view = ViewLayout::default();
     let mut mouse = MouseInput::default();
     let mut mouse_captured = false;
-    while !app.should_quit() {
+    while !app.should_quit() && !termination.requested() {
         if app.config().mouse_enabled != mouse_captured {
             set_mouse_capture(app.config().mouse_enabled)?;
             mouse_captured = app.config().mouse_enabled;
@@ -124,8 +199,8 @@ fn run(
         } else {
             50
         };
-        if event::poll(Duration::from_millis(poll_ms))? {
-            match event::read()? {
+        match input.recv_timeout(Duration::from_millis(poll_ms)) {
+            Ok(event) => match event? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     if let Some(action) = ui::key_action(app, &view, key) {
                         app.dispatch(action);
@@ -142,6 +217,10 @@ fn run(
                 }
                 Event::Paste(text) => app.dispatch(Action::Paste(text)),
                 _ => {}
+            },
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::other("读取终端输入的线程意外退出"));
             }
         }
         if let Some(session) = session {
@@ -158,7 +237,7 @@ fn run(
             }
         }
     }
-    if mouse_captured {
+    if mouse_captured && !termination.hung_up() {
         set_mouse_capture(false)?;
     }
     Ok(())

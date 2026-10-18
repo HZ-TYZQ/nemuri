@@ -1487,6 +1487,7 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
+ "signal-hook",
  "tempfile",
  "toml",
  "unicode-width 0.2.2",
