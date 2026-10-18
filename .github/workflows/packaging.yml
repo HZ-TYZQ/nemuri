@@ -31,6 +31,8 @@ jobs:
   fedora-rpm:
     runs-on: ubuntu-24.04
     container: fedora:44
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/packaging/rpmbuild/cargo-target
     steps:
       - name: Install build tools
         run: |
@@ -39,6 +41,10 @@ jobs:
             alsa-lib-devel \
             sqlite-devel
       - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: fedora-44-rpm
+          workspaces: ". -> packaging/rpmbuild/cargo-target"
       - name: Build RPM and SRPM
         run: ./packaging/build-rpm.sh
       - uses: actions/upload-artifact@v7

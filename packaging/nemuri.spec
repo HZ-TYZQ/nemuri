@@ -16,6 +16,9 @@ BuildRequires:  pkgconfig(sqlite3)
 
 ExclusiveArch:  x86_64
 
+# Standalone SRPM builds use a local target; build-rpm.sh supplies a cacheable one.
+%{!?nemuri_cargo_target_dir:%global nemuri_cargo_target_dir .cargo-target}
+
 # 1.4.0 及以前叫 music-player；版本高于它时直接替换旧包。
 Provides:       music-player = %{version}-%{release}
 Obsoletes:      music-player < %{version}-%{release}
@@ -33,19 +36,19 @@ tar -xzf %{SOURCE1}
 
 %build
 export CARGO_HOME="$PWD/.cargo-home"
-export CARGO_TARGET_DIR="$PWD/.cargo-target"
+export CARGO_TARGET_DIR="%{nemuri_cargo_target_dir}"
 mkdir -p "$CARGO_HOME"
 cp vendor-config.toml "$CARGO_HOME/config.toml"
 cargo build --release --locked --offline
 
 %check
 export CARGO_HOME="$PWD/.cargo-home"
-export CARGO_TARGET_DIR="$PWD/.cargo-target"
+export CARGO_TARGET_DIR="%{nemuri_cargo_target_dir}"
 cargo test --release --locked --offline
 desktop-file-validate packaging/%{name}.desktop
 
 %install
-install -Dpm 0755 .cargo-target/release/%{name} %{buildroot}%{_bindir}/%{name}
+install -Dpm 0755 "%{nemuri_cargo_target_dir}/release/%{name}" %{buildroot}%{_bindir}/%{name}
 install -Dpm 0644 packaging/%{name}.1 %{buildroot}%{_mandir}/man1/%{name}.1
 install -Dpm 0644 packaging/%{name}.desktop %{buildroot}%{_datadir}/applications/%{name}.desktop
 install -Dpm 0644 assets/icons/%{name}.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/%{name}.svg

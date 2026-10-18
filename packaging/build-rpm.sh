@@ -5,6 +5,7 @@ project_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 package_name=nemuri
 spec_file="$project_dir/packaging/$package_name.spec"
 topdir="$project_dir/packaging/rpmbuild"
+target_dir="${CARGO_TARGET_DIR:-$topdir/cargo-target}"
 
 for command_name in cargo tar rpmbuild; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -12,6 +13,11 @@ for command_name in cargo tar rpmbuild; do
         exit 1
     fi
 done
+
+# Keep Cargo artifacts outside BUILD, which rpmbuild removes after packaging.
+# Resolve relative paths before rpmbuild changes into its source directory.
+mkdir -p "$target_dir"
+target_dir=$(cd "$target_dir" && pwd)
 
 cargo_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$project_dir/Cargo.toml" | head -n 1)
 spec_version=$(sed -n 's/^Version:[[:space:]]*//p' "$spec_file" | head -n 1)
@@ -65,6 +71,7 @@ cp "$spec_file" "$topdir/SPECS/"
 
 rpmbuild -ba \
     --define "_topdir $topdir" \
+    --define "nemuri_cargo_target_dir $target_dir" \
     --define "dist .fc44" \
     "$topdir/SPECS/$package_name.spec"
 
