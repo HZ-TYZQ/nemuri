@@ -802,6 +802,8 @@ UTF-16 JSON，加载、添加新点、保存后检查原始字节是否存在于
 ## Termux 实机检查（2026-10-18）
 
 检查的是 `exp/termux` 分支打出的 Termux 包（基于提交 `eb9cd6a`，AAudio 版）。
+Termux 支持（PR #14）已从 `master` 撤回，不随 v2.4.0 发布，代码留在 `exp/termux` 分支。
+BUG-019 仍然保留：原因是依赖 U+FE0E，别的终端缺字又不理会 U+FE0E 时也会这样。
 手机为 OnePlus PLZ110（Android 16），Termux 0.118.3，终端字体先后是 JetBrainsMonoNL Nerd Font Mono
 和 CaskaydiaCove Nerd Font Mono，两种字体都没有 U+23F8。
 
