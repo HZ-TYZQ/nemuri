@@ -72,6 +72,7 @@ cp "$spec_file" "$topdir/SPECS/"
 rpmbuild -ba \
     --define "_topdir $topdir" \
     --define "nemuri_cargo_target_dir $target_dir" \
+    --define "nemuri_cargo_vendor_dir $work_dir/vendor" \
     --define "dist .fc44" \
     "$topdir/SPECS/$package_name.spec"
 

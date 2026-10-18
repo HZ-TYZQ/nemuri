@@ -39,6 +39,10 @@ export CARGO_HOME="$PWD/.cargo-home"
 export CARGO_TARGET_DIR="%{nemuri_cargo_target_dir}"
 mkdir -p "$CARGO_HOME"
 cp vendor-config.toml "$CARGO_HOME/config.toml"
+# Cargo fingerprints registry source paths, so keep them stable across versions.
+%if 0%{?nemuri_cargo_vendor_dir:1}
+sed -i 's|directory = "vendor"|directory = "%{nemuri_cargo_vendor_dir}"|' "$CARGO_HOME/config.toml"
+%endif
 cargo build --release --locked --offline
 
 %check

@@ -90,7 +90,7 @@ jobs:
           ref: ${{ needs.metadata.outputs.tag }}
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: fedora-44-rpm
+          shared-key: fedora-44-rpm-v1
           workspaces: ". -> packaging/rpmbuild/cargo-target"
       - name: Build RPM and SRPM
         run: ./packaging/build-rpm.sh
