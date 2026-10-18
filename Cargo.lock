@@ -1478,7 +1478,6 @@ dependencies = [
  "kdl",
  "lofty",
  "mpris-server",
- "ndk-context",
  "nucleo",
  "percent-encoding",
  "pollster",

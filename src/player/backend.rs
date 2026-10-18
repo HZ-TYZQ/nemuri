@@ -26,19 +26,6 @@ const PENDING_POSITION_LIMIT: Duration = Duration::from_secs(1);
 const HEADLESS_CHANNELS: u16 = 2;
 const HEADLESS_SAMPLE_RATE: u32 = 44_100;
 
-/// cpal 的 AAudio 后端打开设备前要经 JNI 问 Java 的 AudioManager（缓冲区大小、设备列表），
-/// 上下文取自 `ndk-context`；Termux 里运行的是普通可执行文件，没有 JVM，没人初始化它，
-/// 一取就 panic。这里填一个空上下文：cpal 用空指针建 `JavaVM` 时得到错误，
-/// 退回默认设备和未知的缓冲区大小，音频流照样由原生的 AAudio 打开。
-#[cfg(target_os = "android")]
-fn provide_empty_android_context() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    // SAFETY: 只调用一次；空指针只会交给 `JavaVM::from_raw`，它检查空指针并返回错误。
-    ONCE.call_once(|| unsafe {
-        ndk_context::initialize_android_context(std::ptr::null_mut(), std::ptr::null_mut());
-    });
-}
-
 enum InternalEvent {
     SourceEnded {
         generation: u64,
@@ -99,8 +86,6 @@ pub struct Player {
 
 impl Player {
     pub fn new() -> Result<Self, String> {
-        #[cfg(target_os = "android")]
-        provide_empty_android_context();
         let (event_tx, events) = mpsc::channel();
         let error_tx = event_tx.clone();
         let mut sink = DeviceSinkBuilder::from_default_device()

@@ -19,7 +19,6 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
-      termux: ${{ steps.termux.outputs.build }}
     steps:
       - name: Resolve release tag
         id: release
@@ -72,16 +71,6 @@ jobs:
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: test -s "docs/releases/$RELEASE_TAG.md"
-      # Tags from before the Termux build script are rebuilt without Termux packages.
-      - name: Check for Termux packaging
-        id: termux
-        shell: bash
-        run: |
-          if [[ -f packaging/termux/build.sh ]]; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          fi
 
   rpm:
     needs: metadata
@@ -164,52 +153,8 @@ jobs:
           path: ${{ runner.temp }}/windows-dist/*
           if-no-files-found: error
 
-  termux:
-    needs: metadata
-    if: needs.metadata.outputs.termux == 'true'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.metadata.outputs.tag }}
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android, x86_64-linux-android
-      - uses: Swatinem/rust-cache@v2
-      # The runner's default NDK is older than the one Termux builds with.
-      # The container has no libaaudio; the NDK's stub only lets programs load.
-      - name: Select the NDK
-        run: |
-          grep Pkg.Revision "$ANDROID_NDK_LATEST_HOME/source.properties"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
-          echo "AAUDIO_STUB=$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/x86_64-linux-android/26/libaaudio.so" >> "$GITHUB_ENV"
-      - name: Build packages
-        run: |
-          mkdir -p "$RUNNER_TEMP/termux-dist"
-          for arch in aarch64 x86_64; do
-            cp "$(packaging/termux/build.sh deb "$arch")" "$RUNNER_TEMP/termux-dist/"
-          done
-      - name: Install and start the x86_64 package in Termux
-        run: >-
-          docker run --rm --security-opt seccomp=unconfined
-          -v "$RUNNER_TEMP/termux-dist:/debs:ro"
-          -v "$AAUDIO_STUB:/system/lib64/libaaudio.so:ro"
-          termux/termux-docker:x86_64
-          bash -c 'apt-get update && apt-get install -y /debs/nemuri_*_x86_64.deb && nemuri --version && nemuri --help > /dev/null'
-      - uses: actions/upload-artifact@v7
-        with:
-          name: termux-debs
-          path: ${{ runner.temp }}/termux-dist/*.deb
-          if-no-files-found: error
-
-  # Runs after termux too, or without it for tags that predate it.
   publish:
-    needs: [metadata, rpm, windows-package, termux]
-    if: >-
-      !cancelled()
-      && needs.rpm.result == 'success'
-      && needs.windows-package.result == 'success'
-      && (needs.termux.result == 'success' || needs.termux.result == 'skipped')
+    needs: [metadata, rpm, windows-package]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -223,11 +168,6 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: windows-packages
-          path: release-assets
-      - uses: actions/download-artifact@v8
-        if: needs.metadata.outputs.termux == 'true'
-        with:
-          name: termux-debs
           path: release-assets
       - name: Generate SHA-256 checksums
         shell: bash

@@ -44,7 +44,7 @@ impl AppPaths {
         let config = dirs::config_dir().ok_or_else(|| missing_dir("配置"))?;
         let data = dirs::data_dir().ok_or_else(|| missing_dir("应用数据"))?;
         let cache = dirs::cache_dir().ok_or_else(|| missing_dir("缓存"))?;
-        Ok(Self::from_roots(config, data, cache, default_music_dir()))
+        Ok(Self::from_roots(config, data, cache, dirs::audio_dir()))
     }
 
     pub fn from_roots(
@@ -69,19 +69,6 @@ impl AppPaths {
             renamed_dirs,
         }
     }
-}
-
-/// 系统的 Music 目录。
-#[cfg(not(target_os = "android"))]
-fn default_music_dir() -> Option<PathBuf> {
-    dirs::audio_dir()
-}
-
-/// Termux 里没有 XDG 用户目录，用 `termux-setup-storage` 建的 `~/storage/music`，
-/// 它指向共享存储里的 Music。
-#[cfg(target_os = "android")]
-fn default_music_dir() -> Option<PathBuf> {
-    dirs::audio_dir().or_else(|| dirs::home_dir().map(|home| home.join("storage").join("music")))
 }
 
 fn missing_dir(name: &str) -> io::Error {
