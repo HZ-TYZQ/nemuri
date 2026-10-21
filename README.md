@@ -4,7 +4,7 @@ Nemuri（眠り，睡眠）是为 ASMR 长录音设计的终端播放器，也�
 
 - 适合按创作者分文件夹整理的音乐库
 - 支持 MP3、FLAC、WAV、OGG/OGA Vorbis、M4A/AAC、AAC ADTS 和 AIFF
-- 支持 Fedora 44 和 Windows 11（x86_64）
+- 支持 Fedora 44、Arch Linux 及其衍生版和 Windows 11（x86_64）
 
 1.4.0 及以前叫 Music Player，升级说明见[下文](#从-music-player-升级)。
 
@@ -26,7 +26,10 @@ Nemuri（眠り，睡眠）是为 ASMR 长录音设计的终端播放器，也�
 | 系统 | 安装方法 |
 |---|---|
 | Fedora 44 | `sudo dnf install ./nemuri-<版本>-1.fc44.x86_64.rpm` |
+| Arch Linux 及衍生版 | `sudo pacman -U ./nemuri-<版本>-1-x86_64.pkg.tar.zst` |
 | Windows 11 | 运行 `nemuri-<版本>-windows-x86_64-setup.exe`，装到当前用户，不需要管理员权限；<br>或者解压 `…-portable.zip`，运行 `nemuri.cmd` |
+
+Arch 包按发版时的 Arch 构建，安装前先用 `sudo pacman -Syu` 把系统更新到最新。
 
 Windows 安装包尚未签名，SmartScreen 可能提示“未知发布者”。
 
@@ -118,10 +121,12 @@ Nemuri 不会往音乐库里写任何文件。
 Nemuri 用 Rust 编写，播放用 Rodio，标签用 Lofty 读取，曲库索引存在可以随时重建的 SQLite 缓存里。
 
 在 Fedora 容器中构建，需要 `rust cargo alsa-lib-devel sqlite-devel`；打 RPM 另需 `rpm-build desktop-file-utils`。
+Arch 包在 Arch 容器中打，需要 `base-devel rust alsa-lib sqlite hicolor-icon-theme desktop-file-utils`。
 
 ```sh
 cargo test --all-targets --locked
 ./packaging/build-rpm.sh    # 生成 RPM 和 SRPM
+./packaging/build-arch.sh   # 生成 Arch 包（.pkg.tar.zst）
 ```
 
 Windows 版由 GitHub Actions 构建和打包。
