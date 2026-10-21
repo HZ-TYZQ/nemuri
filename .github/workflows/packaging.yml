@@ -1,10 +1,10 @@
 name: Packaging
 
-# Building the RPM and the Windows installer takes most of the CI time and
-# repeats the tests CI already runs, so it only runs when packaging inputs
-# change. Release-prep commits always touch Cargo.toml and the spec, so the
-# packages are still built and the installer tested before every tag; run it
-# by hand for anything else.
+# Building the RPM, the Arch package and the Windows installer takes most of
+# the CI time and repeats the tests CI already runs, so it only runs when
+# packaging inputs change. Release-prep commits always touch Cargo.toml, the
+# spec and the PKGBUILD, so the packages are still built and the installers
+# tested before every tag; run it by hand for anything else.
 on:
   push:
     branches: [master]
@@ -48,6 +48,48 @@ jobs:
             packaging/rpmbuild/RPMS/**/*.rpm
             packaging/rpmbuild/SRPMS/*.rpm
           if-no-files-found: error
+
+  # Built under stock Arch makepkg.conf, so it targets baseline x86-64 and
+  # installs on Arch and its derivatives. Mirrors the Release steps.
+  arch-package:
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install build tools
+        run: |
+          pacman -Syu --needed --noconfirm \
+            base-devel git rust desktop-file-utils \
+            alsa-lib hicolor-icon-theme sqlite
+      - uses: actions/checkout@v6
+      # makepkg refuses to run as root.
+      - name: Build Arch package
+        run: |
+          useradd --create-home builder
+          chown -R builder .
+          runuser -u builder -- ./packaging/build-arch.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: arch-packages-ci
+          path: packaging/archbuild/*.pkg.tar.zst
+          if-no-files-found: error
+
+  # A fresh container has none of the runtime libraries, so this checks that
+  # depends= alone lets pacman install the package and the binary start.
+  arch-install:
+    needs: arch-package
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: arch-packages-ci
+          path: arch-dist
+      - name: Install and start the package
+        run: |
+          pacman -Syu --noconfirm
+          pacman -U --noconfirm arch-dist/nemuri-*-x86_64.pkg.tar.zst
+          nemuri --version
+          nemuri --help > /dev/null
 
   # Mirrors the Release packaging steps so ISS, license staging, and launcher
   # regressions surface before a tag build.

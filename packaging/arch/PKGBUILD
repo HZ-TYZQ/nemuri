@@ -1,0 +1,56 @@
+# Maintainer: HZ-TYZQ
+
+# 由 packaging/build-arch.sh 从工作区打包源码后调用 makepkg 构建。
+# 在原版 Arch 的 makepkg.conf 下编译，产物只要求 x86-64 基线，
+# 可装在 Arch 及 EndeavourOS、CachyOS 等衍生版上；系统库要不早于构建时。
+pkgname=nemuri
+pkgver=2.4.0
+pkgrel=1
+pkgdesc='Terminal player for ASMR and music'
+arch=('x86_64')
+url='https://github.com/HZ-TYZQ/nemuri'
+license=('MIT' 'Apache-2.0' 'MPL-2.0' 'BSD-3-Clause')
+# libgcc 拆分前的衍生版没有 libgcc 包，依赖 gcc-libs 两边都能装。
+depends=('alsa-lib' 'gcc-libs' 'glibc' 'hicolor-icon-theme' 'sqlite')
+makedepends=('cargo')
+checkdepends=('desktop-file-utils')
+# 包从 GitHub Releases 下载，不另出 nemuri-debug 包。
+options=('!debug')
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo test --frozen --release
+    desktop-file-validate "packaging/$pkgname.desktop"
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm0755 -t "$pkgdir/usr/bin/" "target/release/$pkgname"
+    install -Dm0644 -t "$pkgdir/usr/share/man/man1/" "packaging/$pkgname.1"
+    install -Dm0644 -t "$pkgdir/usr/share/applications/" "packaging/$pkgname.desktop"
+    install -Dm0644 "assets/icons/$pkgname.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$pkgname.svg"
+    install -Dm0644 "assets/icons/$pkgname-48.png" "$pkgdir/usr/share/icons/hicolor/48x48/apps/$pkgname.png"
+    install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/" \
+        LICENSE \
+        packaging/licenses/Apache-2.0.txt \
+        packaging/licenses/MPL-2.0.txt \
+        packaging/licenses/THIRD-PARTY-NOTICES.txt
+    install -Dm0644 -t "$pkgdir/usr/share/doc/$pkgname/" README.md changelog.md
+}

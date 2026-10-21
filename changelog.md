@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### 构建与发行
+
+- 新增 Arch Linux x86_64 包（`.pkg.tar.zst`），用 `pacman -U` 安装。按原版 Arch 的 x86-64 基线编译，不用 CachyOS 等的优化指令集，Arch 和跟着更新的衍生版都能装。Packaging 工作流打包后在干净的 Arch 容器里安装并启动一次；发版时和 RPM、Windows 包一起上传，2.4.0 及以前的 tag 重新构建时没有 Arch 包
+
 ## [2.4.0] - 2026-10-18
 
 ### 播放
