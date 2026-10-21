@@ -19,6 +19,7 @@ jobs:
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
+      arch: ${{ steps.arch.outputs.build }}
     steps:
       - name: Resolve release tag
         id: release
@@ -65,12 +66,29 @@ jobs:
             echo "Version mismatch: tag=$tag_version cargo=$cargo_version spec=$spec_version" >&2
             exit 1
           fi
+          if [[ -f packaging/arch/PKGBUILD ]]; then
+            pkgbuild_version=$(sed -n 's/^pkgver=//p' packaging/arch/PKGBUILD | head -n 1)
+            if [[ "$cargo_version" != "$pkgbuild_version" ]]; then
+              echo "Version mismatch: cargo=$cargo_version PKGBUILD=$pkgbuild_version" >&2
+              exit 1
+            fi
+          fi
           echo "version=$cargo_version" >> "$GITHUB_OUTPUT"
       - name: Check release notes
         shell: bash
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: test -s "docs/releases/$RELEASE_TAG.md"
+      # Tags from before the PKGBUILD are rebuilt without an Arch package.
+      - name: Check for Arch packaging
+        id: arch
+        shell: bash
+        run: |
+          if [[ -f packaging/arch/PKGBUILD ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
 
   rpm:
     needs: metadata
@@ -94,6 +112,32 @@ jobs:
           path: |
             packaging/rpmbuild/RPMS/**/*.rpm
             packaging/rpmbuild/SRPMS/*.rpm
+          if-no-files-found: error
+
+  arch:
+    needs: metadata
+    if: needs.metadata.outputs.arch == 'true'
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - name: Install build tools
+        run: |
+          pacman -Syu --needed --noconfirm \
+            base-devel git rust desktop-file-utils \
+            alsa-lib hicolor-icon-theme sqlite
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.metadata.outputs.tag }}
+      # makepkg refuses to run as root.
+      - name: Build Arch package
+        run: |
+          useradd --create-home builder
+          chown -R builder .
+          runuser -u builder -- ./packaging/build-arch.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: arch-packages
+          path: packaging/archbuild/*.pkg.tar.zst
           if-no-files-found: error
 
   windows-build:
@@ -153,8 +197,14 @@ jobs:
           path: ${{ runner.temp }}/windows-dist/*
           if-no-files-found: error
 
+  # Runs after arch too, or without it for tags that predate it.
   publish:
-    needs: [metadata, rpm, windows-package]
+    needs: [metadata, rpm, arch, windows-package]
+    if: >-
+      !cancelled()
+      && needs.rpm.result == 'success'
+      && needs.windows-package.result == 'success'
+      && (needs.arch.result == 'success' || needs.arch.result == 'skipped')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -168,6 +218,11 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: windows-packages
+          path: release-assets
+      - uses: actions/download-artifact@v8
+        if: needs.metadata.outputs.arch == 'true'
+        with:
+          name: arch-packages
           path: release-assets
       - name: Generate SHA-256 checksums
         shell: bash
