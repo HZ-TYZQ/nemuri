@@ -1,6 +1,7 @@
 /target
 /Temp/
 /packaging/rpmbuild/
+/packaging/archbuild/
 /packaging/*.tar.gz
 AGENTS.md
 cava/
