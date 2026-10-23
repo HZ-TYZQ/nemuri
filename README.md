@@ -1,6 +1,7 @@
 # Nemuri
 
 **Vibe coded with Anthropic-Claude**
+
 Nemuri（眠り，睡眠）是为 ASMR 长录音设计的终端播放器，也照常播放普通音乐。
 
 - 适合按创作者分文件夹整理的音乐库
